@@ -20,6 +20,7 @@ kind: InferenceWorkspace
 metadata:
   name: alice-test
 spec:
+  clusterQueue: inference-workspaces
   subjects:
     - kind: User
       name: alice
@@ -38,6 +39,8 @@ Creating this resource provisions:
 
 The workspace role does not permit subjects to mutate LocalQueues, cluster
 RBAC, or CRDs. Kueue queue selection remains controlled by the operator.
+`spec.clusterQueue` may reference any ClusterQueue in the initial API and
+defaults to `inference-workspaces` when omitted.
 
 Permission to create an `InferenceWorkspace` includes permission to delegate
 workspace access to other users and service accounts.

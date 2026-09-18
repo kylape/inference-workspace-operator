@@ -27,7 +27,7 @@ func TestReconcileNamespaceWorkspace(t *testing.T) {
 		Spec: workspacev1alpha1.InferenceWorkspaceSpec{Subjects: []workspacev1alpha1.WorkspaceSubject{
 			{Kind: "User", Name: "alice"},
 			{Kind: "ServiceAccount", Name: "runner", Namespace: "ci"},
-		}},
+		}, ClusterQueue: "development"},
 	}
 	client := fake.NewClientBuilder().
 		WithScheme(scheme).
@@ -63,8 +63,8 @@ func TestReconcileNamespaceWorkspace(t *testing.T) {
 	if err := client.Get(ctx, types.NamespacedName{Name: LocalQueueName, Namespace: namespace.Name}, queue); err != nil {
 		t.Fatalf("default LocalQueue: %v", err)
 	}
-	if queue.Spec.ClusterQueue != kueuev1beta2.ClusterQueueReference(ClusterQueueName) {
-		t.Fatalf("LocalQueue references %q, want %q", queue.Spec.ClusterQueue, ClusterQueueName)
+	if queue.Spec.ClusterQueue != "development" {
+		t.Fatalf("LocalQueue references %q, want %q", queue.Spec.ClusterQueue, "development")
 	}
 
 	current := &workspacev1alpha1.InferenceWorkspace{}
@@ -119,6 +119,14 @@ func TestLocalQueueActive(t *testing.T) {
 	}}
 	if !localQueueActive(queue) {
 		t.Fatal("expected LocalQueue to be active")
+	}
+}
+
+func TestClusterQueueDefaults(t *testing.T) {
+	t.Parallel()
+	workspace := &workspacev1alpha1.InferenceWorkspace{}
+	if got := requestedClusterQueue(workspace); got != kueuev1beta2.ClusterQueueReference(DefaultClusterQueueName) {
+		t.Fatalf("default ClusterQueue is %q, want %q", got, DefaultClusterQueueName)
 	}
 }
 

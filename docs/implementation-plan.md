@@ -21,6 +21,7 @@ kind: InferenceWorkspace
 metadata:
   name: alice-test
 spec:
+  clusterQueue: inference-workspaces
   subjects:
     - kind: User
       name: alice
@@ -67,7 +68,9 @@ reserved for the workspace operator.
 ## Kueue integration
 
 Every workspace namespace receives a Kueue `LocalQueue` named `default`. It
-references the platform-owned `ClusterQueue` named `inference-workspaces`.
+references the `ClusterQueue` selected through `spec.clusterQueue`, which
+defaults to `inference-workspaces` when omitted. Queue selection is immutable
+because Kueue does not allow an existing LocalQueue to change its ClusterQueue.
 
 Naming the LocalQueue `default` enables Kueue LocalQueue defaulting for enabled
 workload integrations. The cluster's Kueue installation remains responsible
@@ -77,11 +80,12 @@ workloads in workspace namespaces.
 The operator does not create or manage the ClusterQueue, ResourceFlavors,
 cohorts, or priority policy.
 
-The hard-coded ClusterQueue reference is provisional. The public API will
-eventually expose a logical workload class that the operator resolves to an
-authorized ClusterQueue based on centrally managed user or team entitlements.
-Workspace users must never receive permission to create, replace, or modify a
-LocalQueue, because doing so could bypass that authorization boundary.
+The initial implementation accepts any ClusterQueue requested by the workspace
+creator. A future integration with group, team, and user management will check
+that every subject receiving workspace access is entitled to the requested
+ClusterQueue and refuse to provision unauthorized requests. Workspace users
+must never receive permission to create, replace, or modify a LocalQueue,
+because doing so could bypass that authorization boundary.
 
 ## Status
 

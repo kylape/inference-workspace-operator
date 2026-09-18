@@ -8,7 +8,7 @@ import (
 const ReadyCondition = "Ready"
 
 // WorkspaceSubject identifies an identity that receives access to a workspace.
-// +kubebuilder:validation:XValidation:rule="(self.kind == 'User' && !has(self.namespace)) || (self.kind == 'ServiceAccount' && has(self.namespace) && self.namespace != '')",message="User subjects must omit namespace; ServiceAccount subjects must specify namespace"
+// +kubebuilder:validation:XValidation:rule="(self.kind == 'User' && !has(self.namespace)) || (self.kind == 'ServiceAccount' && has(self.namespace) && self.namespace != ”)",message="User subjects must omit namespace; ServiceAccount subjects must specify namespace"
 type WorkspaceSubject struct {
 	// Kind is either User or ServiceAccount.
 	// +kubebuilder:validation:Enum=User;ServiceAccount
@@ -26,6 +26,14 @@ type InferenceWorkspaceSpec struct {
 	// Subjects receive namespaced access to the workspace.
 	// +kubebuilder:validation:MinItems=1
 	Subjects []WorkspaceSubject `json:"subjects"`
+
+	// ClusterQueue is the Kueue ClusterQueue that backs the workspace's
+	// default LocalQueue.
+	// +kubebuilder:default=inference-workspaces
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="clusterQueue is immutable"
+	ClusterQueue string `json:"clusterQueue,omitempty"`
 }
 
 type InferenceWorkspaceStatus struct {

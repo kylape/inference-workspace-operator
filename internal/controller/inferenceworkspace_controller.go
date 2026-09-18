@@ -21,12 +21,12 @@ import (
 )
 
 const (
-	FinalizerName     = "inference.redhat.com/workspace-cleanup"
-	NamespacePrefix   = "workspace-"
-	AccessBindingName = "workspace-access"
-	WorkspaceRoleName = "inference-workspace-user"
-	LocalQueueName    = "default"
-	ClusterQueueName  = "inference-workspaces"
+	FinalizerName           = "inference.redhat.com/workspace-cleanup"
+	NamespacePrefix         = "workspace-"
+	AccessBindingName       = "workspace-access"
+	WorkspaceRoleName       = "inference-workspace-user"
+	LocalQueueName          = "default"
+	DefaultClusterQueueName = "inference-workspaces"
 )
 
 var ErrNamespaceCollision = errors.New("workspace namespace already exists and is not controlled by this workspace")
@@ -149,10 +149,17 @@ func (r *InferenceWorkspaceReconciler) ensureLocalQueue(
 		ObjectMeta: metav1.ObjectMeta{Name: LocalQueueName, Namespace: namespace},
 	}
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, queue, func() error {
-		queue.Spec.ClusterQueue = kueuev1beta2.ClusterQueueReference(ClusterQueueName)
+		queue.Spec.ClusterQueue = requestedClusterQueue(workspace)
 		return controllerutil.SetControllerReference(workspace, queue, r.Scheme)
 	})
 	return queue, err
+}
+
+func requestedClusterQueue(workspace *workspacev1alpha1.InferenceWorkspace) kueuev1beta2.ClusterQueueReference {
+	if workspace.Spec.ClusterQueue == "" {
+		return kueuev1beta2.ClusterQueueReference(DefaultClusterQueueName)
+	}
+	return kueuev1beta2.ClusterQueueReference(workspace.Spec.ClusterQueue)
 }
 
 func localQueueActive(queue *kueuev1beta2.LocalQueue) bool {

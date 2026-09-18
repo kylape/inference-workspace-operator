@@ -49,6 +49,16 @@ spec:
             type: object
           spec:
             properties:
+              clusterQueue:
+                default: inference-workspaces
+                description: ClusterQueue is the Kueue ClusterQueue that backs the
+                  workspace's default LocalQueue.
+                maxLength: 253
+                pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                type: string
+                x-kubernetes-validations:
+                - message: clusterQueue is immutable
+                  rule: self == oldSelf
               subjects:
                 description: Subjects receive namespaced access to the workspace.
                 items:
