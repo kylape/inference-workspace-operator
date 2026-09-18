@@ -1,0 +1,55 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: inference-workspace-operator
+  namespace: inference-workspace-operator
+  labels:
+    app.kubernetes.io/name: inference-workspace-operator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: inference-workspace-operator
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: inference-workspace-operator
+    spec:
+      serviceAccountName: inference-workspace-operator
+      containers:
+        - args:
+            - --leader-elect
+            - --metrics-bind-address=:8443
+            - --health-probe-bind-address=:8081
+          image: quay.io/klape/inference-workspace-opeartor:latest
+          name: manager
+          ports:
+            - containerPort: 8081
+              name: health
+            - containerPort: 8443
+              name: metrics
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+          resources:
+            limits:
+              cpu: 500m
+              memory: 256Mi
+            requests:
+              cpu: 50m
+              memory: 64Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+      securityContext:
+        runAsNonRoot: true
+      terminationGracePeriodSeconds: 10

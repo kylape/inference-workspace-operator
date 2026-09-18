@@ -1,0 +1,127 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: inferenceworkspaces.inference.redhat.com
+spec:
+  group: inference.redhat.com
+  names:
+    kind: InferenceWorkspace
+    listKind: InferenceWorkspaceList
+    plural: inferenceworkspaces
+    shortNames:
+      - iw
+    singular: inferenceworkspace
+  scope: Cluster
+  versions:
+    - additionalPrinterColumns:
+        - jsonPath: .status.conditions[?(@.type=="Ready")].status
+          name: Ready
+          type: string
+        - jsonPath: .status.namespaceRef.name
+          name: Namespace
+          type: string
+        - jsonPath: .metadata.creationTimestamp
+          name: Age
+          type: date
+      name: v1alpha1
+      schema:
+        openAPIV3Schema:
+          description: InferenceWorkspace requests an isolated inference workspace.
+          properties:
+            apiVersion:
+              type: string
+            kind:
+              type: string
+            metadata:
+              type: object
+            spec:
+              properties:
+                subjects:
+                  items:
+                    properties:
+                      kind:
+                        enum:
+                          - User
+                          - ServiceAccount
+                        type: string
+                      name:
+                        minLength: 1
+                        type: string
+                      namespace:
+                        type: string
+                    required:
+                      - kind
+                      - name
+                    type: object
+                    x-kubernetes-validations:
+                      - message: User subjects must omit namespace; ServiceAccount subjects must specify namespace
+                        rule: "(self.kind == 'User' && !has(self.namespace)) || (self.kind == 'ServiceAccount' && has(self.namespace) && self.namespace != '')"
+                  minItems: 1
+                  type: array
+              required:
+                - subjects
+              type: object
+            status:
+              properties:
+                conditions:
+                  items:
+                    properties:
+                      lastTransitionTime:
+                        format: date-time
+                        type: string
+                      message:
+                        maxLength: 32768
+                        type: string
+                      observedGeneration:
+                        format: int64
+                        minimum: 0
+                        type: integer
+                      reason:
+                        maxLength: 1024
+                        minLength: 1
+                        pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                        type: string
+                      status:
+                        enum:
+                          - "True"
+                          - "False"
+                          - Unknown
+                        type: string
+                      type:
+                        maxLength: 316
+                        pattern: ^([a-z0-9]([-a-z0-9\.]*[a-z0-9])?\.)*([A-Za-z0-9][-A-Za-z0-9_.]*[A-Za-z0-9])$
+                        type: string
+                    required:
+                      - lastTransitionTime
+                      - message
+                      - reason
+                      - status
+                      - type
+                    type: object
+                  type: array
+                  x-kubernetes-list-map-keys:
+                    - type
+                  x-kubernetes-list-type: map
+                kubeconfigSecretRef:
+                  properties:
+                    name:
+                      type: string
+                    namespace:
+                      type: string
+                  type: object
+                namespaceRef:
+                  properties:
+                    name:
+                      type: string
+                  type: object
+              type: object
+          required:
+            - spec
+          type: object
+          x-kubernetes-validations:
+            - message: workspace names must be at most 53 characters to allow the workspace- prefix
+              rule: size(self.metadata.name) <= 53
+      served: true
+      storage: true
+      subresources:
+        status: {}

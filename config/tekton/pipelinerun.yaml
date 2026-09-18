@@ -1,0 +1,22 @@
+apiVersion: tekton.dev/v1
+kind: PipelineRun
+metadata:
+  generateName: inference-workspace-operator-build-
+  namespace: inference-workspace-operator
+spec:
+  params:
+    - name: git-revision
+      value: codex/initial-inference-workspace-api
+    - name: image
+      value: quay.io/klape/inference-workspace-opeartor:initial
+    - name: push-image
+      value: "false"
+  pipelineRef:
+    name: inference-workspace-operator-build
+  taskRunTemplate:
+    serviceAccountName: inference-workspace-operator-builder
+  timeouts:
+    pipeline: 30m
+  workspaces:
+    - emptyDir: {}
+      name: source

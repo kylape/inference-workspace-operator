@@ -1,48 +1,52 @@
-# Inference Workspace Manager
+# Inference Workspace Operator
 
-Inference Workspace Manager provisions short-lived workspaces for inference
-development and testing. It provides a platform-owned boundary between client
-tools such as `infra`, application orchestrators such as Forge and Fournos, and
-cluster services such as Kueue.
+Inference Workspace Operator provisions isolated workspaces for inference
+development and testing. It provides an Inference Engineering-owned boundary
+between clients such as `infra` or a future UI and cluster services such as
+Kueue and vCluster.
 
-## Initial scope
+The initial implementation provisions a host-cluster namespace for each
+cluster-scoped `InferenceWorkspace` resource. vCluster-backed workspaces are a
+planned extension of the same API.
 
-The first implementation will define an `InferenceWorkspace` resource and use
-a Kubernetes Secret containing YAML to map users and teams to platform policy.
-The initial access mode is a host-cluster namespace. vCluster-backed workspaces
-will use the same API later, but are intentionally outside the first slice.
+See the [implementation plan](docs/implementation-plan.md) for the API and
+ownership decisions.
 
-The manager will eventually reconcile:
-
-* a workspace namespace;
-* team- and user-scoped RBAC;
-* a default Kueue `LocalQueue` binding; and
-* workspace expiry metadata.
-
-Forge and Fournos remain responsible for application lifecycle and topology.
-The manager owns platform policy and access provisioning.
-
-## Team mapping
-
-The mapping Secret contains YAML in a `mapping.yaml` data entry. The Secret is
-platform-owned and should not be writable by workspace users.
+## Workspace request
 
 ```yaml
-teams:
-  inference-engineering:
-    members:
-      - alice
-    queue: inference-engineering-dev
-    priorityClass: inference-development
-  psap:
-    members:
-      - bob
-    queue: psap-ci
-    priorityClass: ci
+apiVersion: inference.redhat.com/v1alpha1
+kind: InferenceWorkspace
+metadata:
+  name: alice-test
+spec:
+  subjects:
+    - kind: User
+      name: alice
+    - kind: ServiceAccount
+      name: ci-runner
+      namespace: ci-system
 ```
 
-The exact schema is part of the API design and will be validated by the
-controller. A workspace request may reference a team, but the requester must
-be authenticated and authorized for that team; the reference must not grant
-membership by itself.
+Creating this resource provisions:
+
+* namespace `workspace-alice-test`;
+* namespaced `admin` access for the requested subjects; and
+* a Kueue `LocalQueue` named `default` that references the platform-owned
+  `inference-workspaces` ClusterQueue.
+
+Permission to create an `InferenceWorkspace` includes permission to delegate
+workspace access to other users and service accounts.
+
+## Development
+
+```bash
+make test
+make build
+```
+
+The Tekton resources in `config/tekton` clone a requested Git revision, run the
+tests, build the manager binary, and build the operator container image. Image
+publishing is disabled by default and can be enabled when a registry credential
+workspace is supplied.
 

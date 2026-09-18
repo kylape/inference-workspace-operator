@@ -1,0 +1,8 @@
+apiVersion: inference.redhat.com/v1alpha1
+kind: InferenceWorkspace
+metadata:
+  name: alice-test
+spec:
+  subjects:
+    - kind: User
+      name: alice
