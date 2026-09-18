@@ -6,4 +6,5 @@ resources:
   - ../rbac/role.yaml
   - ../rbac/role_binding.yaml
   - ../rbac/requester_role.yaml
+  - ../rbac/workspace_role.yaml
   - ../manager/deployment.yaml

@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"os"
 	"testing"
 
 	workspacev1alpha1 "github.com/kylape/inference-workspace-operator/api/v1alpha1"
@@ -14,6 +15,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	kueuev1beta2 "sigs.k8s.io/kueue/apis/kueue/v1beta2"
+	"sigs.k8s.io/yaml"
 )
 
 func TestReconcileNamespaceWorkspace(t *testing.T) {
@@ -52,6 +54,9 @@ func TestReconcileNamespaceWorkspace(t *testing.T) {
 	}
 	if len(binding.Subjects) != 2 || binding.Subjects[0].APIGroup != rbacv1.GroupName || binding.Subjects[1].Namespace != "ci" {
 		t.Fatalf("unexpected subjects: %#v", binding.Subjects)
+	}
+	if binding.RoleRef.Kind != "ClusterRole" || binding.RoleRef.Name != WorkspaceRoleName {
+		t.Fatalf("unexpected workspace role reference: %#v", binding.RoleRef)
 	}
 
 	queue := &kueuev1beta2.LocalQueue{}
@@ -115,6 +120,48 @@ func TestLocalQueueActive(t *testing.T) {
 	if !localQueueActive(queue) {
 		t.Fatal("expected LocalQueue to be active")
 	}
+}
+
+func TestWorkspaceRoleCannotMutateLocalQueues(t *testing.T) {
+	t.Parallel()
+	manifest, err := os.ReadFile("../../config/rbac/workspace_role.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	role := &rbacv1.ClusterRole{}
+	if err := yaml.Unmarshal(manifest, role); err != nil {
+		t.Fatal(err)
+	}
+	if role.Name != WorkspaceRoleName {
+		t.Fatalf("workspace role is named %q, want %q", role.Name, WorkspaceRoleName)
+	}
+
+	foundLocalQueueRule := false
+	for _, rule := range role.Rules {
+		matchesAPIGroup := contains(rule.APIGroups, kueuev1beta2.GroupVersion.Group) || contains(rule.APIGroups, "*")
+		matchesResource := contains(rule.Resources, "localqueues") || contains(rule.Resources, "*")
+		if !matchesAPIGroup || !matchesResource {
+			continue
+		}
+		foundLocalQueueRule = true
+		for _, verb := range rule.Verbs {
+			if verb != "get" && verb != "list" && verb != "watch" {
+				t.Fatalf("workspace role grants LocalQueue mutation through verb %q", verb)
+			}
+		}
+	}
+	if !foundLocalQueueRule {
+		t.Fatal("workspace role should grant read-only LocalQueue visibility")
+	}
+}
+
+func contains(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 func testScheme(t *testing.T) *runtime.Scheme {

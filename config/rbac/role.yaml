@@ -49,6 +49,14 @@ rules:
       - update
       - patch
   - apiGroups:
+      - rbac.authorization.k8s.io
+    resources:
+      - clusterroles
+    resourceNames:
+      - inference-workspace-user
+    verbs:
+      - bind
+  - apiGroups:
       - kueue.x-k8s.io
     resources:
       - localqueues

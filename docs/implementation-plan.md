@@ -53,9 +53,16 @@ reconciliation fails and the collision is reported through the `Ready`
 condition.
 
 The operator creates a RoleBinding in the workspace namespace that grants each
-subject the built-in `admin` ClusterRole. This grants broad namespaced access
-but does not grant permission to create cluster-scoped resources such as CRDs.
-Users that require their own CRDs will use the future vCluster access mode.
+subject the operator-owned `inference-workspace-user` ClusterRole. The role
+allows normal application and inference workload management but excludes CRD,
+RBAC, and Kueue queue mutation. It grants read-only access to the workspace's
+LocalQueue and Workloads so users can inspect admission state. Users that
+require their own CRDs will use the future vCluster access mode.
+
+The workspace role is intentionally defined by this operator instead of using
+the built-in `admin` or `edit` roles. Those roles are dynamically extended by
+installed operators and cannot guarantee that LocalQueue mutation remains
+reserved for the workspace operator.
 
 ## Kueue integration
 
@@ -69,6 +76,12 @@ workloads in workspace namespaces.
 
 The operator does not create or manage the ClusterQueue, ResourceFlavors,
 cohorts, or priority policy.
+
+The hard-coded ClusterQueue reference is provisional. The public API will
+eventually expose a logical workload class that the operator resolves to an
+authorized ClusterQueue based on centrally managed user or team entitlements.
+Workspace users must never receive permission to create, replace, or modify a
+LocalQueue, because doing so could bypass that authorization boundary.
 
 ## Status
 
@@ -128,4 +141,3 @@ unit tests, and Tekton resources. The Tekton pipeline clones a requested Git
 revision, runs tests, builds the manager binary, and builds the operator image.
 Image pushing remains an explicit pipeline parameter so validation builds do
 not require publishing an image.
-

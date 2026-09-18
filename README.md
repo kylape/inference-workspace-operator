@@ -31,9 +31,13 @@ spec:
 Creating this resource provisions:
 
 * namespace `workspace-alice-test`;
-* namespaced `admin` access for the requested subjects; and
+* namespaced application access through the operator-owned
+  `inference-workspace-user` ClusterRole; and
 * a Kueue `LocalQueue` named `default` that references the platform-owned
   `inference-workspaces` ClusterQueue.
+
+The workspace role does not permit subjects to mutate LocalQueues, cluster
+RBAC, or CRDs. Kueue queue selection remains controlled by the operator.
 
 Permission to create an `InferenceWorkspace` includes permission to delegate
 workspace access to other users and service accounts.
@@ -49,4 +53,3 @@ The Tekton resources in `config/tekton` clone a requested Git revision, run the
 tests, build the manager binary, and build the operator container image. Image
 publishing is disabled by default and can be enabled when a registry credential
 workspace is supplied.
-

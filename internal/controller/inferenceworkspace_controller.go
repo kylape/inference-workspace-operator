@@ -24,6 +24,7 @@ const (
 	FinalizerName     = "inference.redhat.com/workspace-cleanup"
 	NamespacePrefix   = "workspace-"
 	AccessBindingName = "workspace-access"
+	WorkspaceRoleName = "inference-workspace-user"
 	LocalQueueName    = "default"
 	ClusterQueueName  = "inference-workspaces"
 )
@@ -122,7 +123,7 @@ func (r *InferenceWorkspaceReconciler) ensureAccess(
 		binding.RoleRef = rbacv1.RoleRef{
 			APIGroup: rbacv1.GroupName,
 			Kind:     "ClusterRole",
-			Name:     "admin",
+			Name:     WorkspaceRoleName,
 		}
 		binding.Subjects = make([]rbacv1.Subject, 0, len(workspace.Spec.Subjects))
 		for _, subject := range workspace.Spec.Subjects {
