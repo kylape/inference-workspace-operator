@@ -48,6 +48,9 @@ func TestReconcileNamespaceWorkspace(t *testing.T) {
 	if err := client.Get(ctx, types.NamespacedName{Name: "workspace-example"}, namespace); err != nil {
 		t.Fatalf("workspace namespace: %v", err)
 	}
+	if namespace.Labels[KueueManagedLabel] != "true" {
+		t.Fatalf("workspace namespace is not labeled for Kueue management: %#v", namespace.Labels)
+	}
 	binding := &rbacv1.RoleBinding{}
 	if err := client.Get(ctx, types.NamespacedName{Name: AccessBindingName, Namespace: namespace.Name}, binding); err != nil {
 		t.Fatalf("workspace RoleBinding: %v", err)

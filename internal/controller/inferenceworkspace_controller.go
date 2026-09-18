@@ -27,6 +27,7 @@ const (
 	WorkspaceRoleName       = "inference-workspace-user"
 	LocalQueueName          = "default"
 	DefaultClusterQueueName = "inference-workspaces"
+	KueueManagedLabel       = "kueue.openshift.io/managed"
 )
 
 var ErrNamespaceCollision = errors.New("workspace namespace already exists and is not controlled by this workspace")
@@ -90,11 +91,8 @@ func (r *InferenceWorkspaceReconciler) ensureNamespace(
 	if apierrors.IsNotFound(err) {
 		namespace = &corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{
-				Name: name,
-				Labels: map[string]string{
-					"app.kubernetes.io/managed-by":   "inference-workspace-operator",
-					"inference.redhat.com/workspace": workspace.Name,
-				},
+				Name:   name,
+				Labels: workspaceNamespaceLabels(workspace),
 			},
 		}
 		if err := controllerutil.SetControllerReference(workspace, namespace, r.Scheme); err != nil {
@@ -108,7 +106,28 @@ func (r *InferenceWorkspaceReconciler) ensureNamespace(
 	if !metav1.IsControlledBy(namespace, workspace) {
 		return fmt.Errorf("%w: %s", ErrNamespaceCollision, name)
 	}
+	if namespace.Labels == nil {
+		namespace.Labels = make(map[string]string)
+	}
+	changed := false
+	for key, value := range workspaceNamespaceLabels(workspace) {
+		if namespace.Labels[key] != value {
+			namespace.Labels[key] = value
+			changed = true
+		}
+	}
+	if changed {
+		return r.Update(ctx, namespace)
+	}
 	return nil
+}
+
+func workspaceNamespaceLabels(workspace *workspacev1alpha1.InferenceWorkspace) map[string]string {
+	return map[string]string{
+		"app.kubernetes.io/managed-by":   "inference-workspace-operator",
+		"inference.redhat.com/workspace": workspace.Name,
+		KueueManagedLabel:                "true",
+	}
 }
 
 func (r *InferenceWorkspaceReconciler) ensureAccess(

@@ -46,7 +46,9 @@ access or vCluster access.
 ## Namespace reconciliation
 
 For an `InferenceWorkspace` named `<name>`, the operator creates a namespace
-named `workspace-<name>`.
+named `workspace-<name>`. It labels the namespace with
+`kueue.openshift.io/managed: "true"` so the cluster Kueue controller manages
+workloads submitted through the workspace's LocalQueue.
 
 The operator must not adopt an existing namespace. If the target namespace
 already exists and is not controlled by the requesting `InferenceWorkspace`,
