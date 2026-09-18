@@ -15,6 +15,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
+	kueuev1beta2 "sigs.k8s.io/kueue/apis/kueue/v1beta2"
 )
 
 var scheme = runtime.NewScheme()
@@ -24,6 +25,7 @@ func init() {
 	utilruntime.Must(corev1.AddToScheme(scheme))
 	utilruntime.Must(rbacv1.AddToScheme(scheme))
 	utilruntime.Must(workspacev1alpha1.AddToScheme(scheme))
+	utilruntime.Must(kueuev1beta2.AddToScheme(scheme))
 }
 
 func main() {

@@ -12,13 +12,12 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	kueuev1beta2 "sigs.k8s.io/kueue/apis/kueue/v1beta2"
 )
 
 const (
@@ -28,10 +27,6 @@ const (
 	LocalQueueName    = "default"
 	ClusterQueueName  = "inference-workspaces"
 )
-
-var LocalQueueGVK = schema.GroupVersionKind{
-	Group: "kueue.x-k8s.io", Version: "v1beta2", Kind: "LocalQueue",
-}
 
 var ErrNamespaceCollision = errors.New("workspace namespace already exists and is not controlled by this workspace")
 
@@ -148,32 +143,19 @@ func (r *InferenceWorkspaceReconciler) ensureLocalQueue(
 	ctx context.Context,
 	workspace *workspacev1alpha1.InferenceWorkspace,
 	namespace string,
-) (*unstructured.Unstructured, error) {
-	queue := &unstructured.Unstructured{}
-	queue.SetGroupVersionKind(LocalQueueGVK)
-	queue.SetName(LocalQueueName)
-	queue.SetNamespace(namespace)
+) (*kueuev1beta2.LocalQueue, error) {
+	queue := &kueuev1beta2.LocalQueue{
+		ObjectMeta: metav1.ObjectMeta{Name: LocalQueueName, Namespace: namespace},
+	}
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, queue, func() error {
-		if err := unstructured.SetNestedField(queue.Object, ClusterQueueName, "spec", "clusterQueue"); err != nil {
-			return err
-		}
+		queue.Spec.ClusterQueue = kueuev1beta2.ClusterQueueReference(ClusterQueueName)
 		return controllerutil.SetControllerReference(workspace, queue, r.Scheme)
 	})
 	return queue, err
 }
 
-func localQueueActive(queue *unstructured.Unstructured) bool {
-	conditions, found, err := unstructured.NestedSlice(queue.Object, "status", "conditions")
-	if err != nil || !found {
-		return false
-	}
-	for _, item := range conditions {
-		condition, ok := item.(map[string]any)
-		if ok && condition["type"] == "Active" && condition["status"] == "True" {
-			return true
-		}
-	}
-	return false
+func localQueueActive(queue *kueuev1beta2.LocalQueue) bool {
+	return apimeta.IsStatusConditionTrue(queue.Status.Conditions, kueuev1beta2.LocalQueueActive)
 }
 
 func (r *InferenceWorkspaceReconciler) notReady(
@@ -239,12 +221,10 @@ func (r *InferenceWorkspaceReconciler) finalize(
 }
 
 func (r *InferenceWorkspaceReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	queue := &unstructured.Unstructured{}
-	queue.SetGroupVersionKind(LocalQueueGVK)
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&workspacev1alpha1.InferenceWorkspace{}).
 		Owns(&corev1.Namespace{}).
 		Owns(&rbacv1.RoleBinding{}).
-		Owns(queue).
+		Owns(&kueuev1beta2.LocalQueue{}).
 		Complete(r)
 }

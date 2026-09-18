@@ -9,12 +9,11 @@ import (
 	rbacv1 "k8s.io/api/rbac/v1"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	kueuev1beta2 "sigs.k8s.io/kueue/apis/kueue/v1beta2"
 )
 
 func TestReconcileNamespaceWorkspace(t *testing.T) {
@@ -55,14 +54,12 @@ func TestReconcileNamespaceWorkspace(t *testing.T) {
 		t.Fatalf("unexpected subjects: %#v", binding.Subjects)
 	}
 
-	queue := &unstructured.Unstructured{}
-	queue.SetGroupVersionKind(LocalQueueGVK)
+	queue := &kueuev1beta2.LocalQueue{}
 	if err := client.Get(ctx, types.NamespacedName{Name: LocalQueueName, Namespace: namespace.Name}, queue); err != nil {
 		t.Fatalf("default LocalQueue: %v", err)
 	}
-	clusterQueue, _, _ := unstructured.NestedString(queue.Object, "spec", "clusterQueue")
-	if clusterQueue != ClusterQueueName {
-		t.Fatalf("LocalQueue references %q, want %q", clusterQueue, ClusterQueueName)
+	if queue.Spec.ClusterQueue != kueuev1beta2.ClusterQueueReference(ClusterQueueName) {
+		t.Fatalf("LocalQueue references %q, want %q", queue.Spec.ClusterQueue, ClusterQueueName)
 	}
 
 	current := &workspacev1alpha1.InferenceWorkspace{}
@@ -112,10 +109,8 @@ func TestNamespaceCollision(t *testing.T) {
 
 func TestLocalQueueActive(t *testing.T) {
 	t.Parallel()
-	queue := &unstructured.Unstructured{Object: map[string]any{
-		"status": map[string]any{"conditions": []any{
-			map[string]any{"type": "Active", "status": "True"},
-		}},
+	queue := &kueuev1beta2.LocalQueue{Status: kueuev1beta2.LocalQueueStatus{
+		Conditions: []metav1.Condition{{Type: kueuev1beta2.LocalQueueActive, Status: metav1.ConditionTrue}},
 	}}
 	if !localQueueActive(queue) {
 		t.Fatal("expected LocalQueue to be active")
@@ -134,10 +129,8 @@ func testScheme(t *testing.T) *runtime.Scheme {
 	if err := workspacev1alpha1.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
 	}
-	scheme.AddKnownTypeWithName(LocalQueueGVK, &unstructured.Unstructured{})
-	scheme.AddKnownTypeWithName(
-		schema.GroupVersionKind{Group: LocalQueueGVK.Group, Version: LocalQueueGVK.Version, Kind: "LocalQueueList"},
-		&unstructured.UnstructuredList{},
-	)
+	if err := kueuev1beta2.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
 	return scheme
 }
