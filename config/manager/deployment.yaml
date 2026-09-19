@@ -21,7 +21,7 @@ spec:
             - --leader-elect
             - --metrics-bind-address=:8443
             - --health-probe-bind-address=:8081
-          image: quay.io/klape/inference-workspace-operator:0a51344
+          image: quay.io/klape/inference-workspace-operator:918736c
           name: manager
           ports:
             - containerPort: 8081
