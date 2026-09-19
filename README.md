@@ -5,9 +5,8 @@ development and testing. It provides an Inference Engineering-owned boundary
 between clients such as `infra` or a future UI and cluster services such as
 Kueue and vCluster.
 
-The initial implementation provisions a host-cluster namespace for each
-cluster-scoped `InferenceWorkspace` resource. vCluster-backed workspaces are a
-planned extension of the same API.
+The operator provisions either a host-cluster namespace or a vCluster for each
+cluster-scoped `InferenceWorkspace` resource.
 
 See the [implementation plan](docs/implementation-plan.md) for the API and
 ownership decisions.
@@ -20,30 +19,30 @@ kind: InferenceWorkspace
 metadata:
   name: alice-test
 spec:
+  mode: VCluster
   clusterQueue: inference-workspaces
-  subjects:
-    - kind: User
-      name: alice
-    - kind: ServiceAccount
-      name: ci-runner
-      namespace: ci-system
 ```
 
 Creating this resource provisions:
 
 * namespace `workspace-alice-test`;
-* namespaced application access through the operator-owned
-  `inference-workspace-user` ClusterRole; and
 * a Kueue `LocalQueue` named `default` that references the platform-owned
   `inference-workspaces` ClusterQueue.
 
-The workspace role does not permit subjects to mutate LocalQueues, cluster
-RBAC, or CRDs. Kueue queue selection remains controlled by the operator.
+For `VCluster` mode, the operator also installs the pinned vCluster chart and
+publishes its kubeconfig Secret reference in status. The vCluster can read
+host-cluster `CSIStorageCapacity` objects through a dedicated read-only role.
+The chart's own cluster-wide RBAC is disabled.
+
+The reusable workspace role does not permit its subjects to mutate LocalQueues,
+cluster RBAC, or CRDs. Kueue queue selection remains controlled by the operator.
 `spec.clusterQueue` may reference any ClusterQueue in the initial API and
 defaults to `inference-workspaces` when omitted.
 
-Permission to create an `InferenceWorkspace` includes permission to delegate
-workspace access to other users and service accounts.
+The external `infra` service owns user and service-account access. It binds the
+operator-provided workspace role for direct namespace access or grants access
+to the vCluster kubeconfig Secret. Access identities are intentionally absent
+from the `InferenceWorkspace` API.
 
 ## Development
 

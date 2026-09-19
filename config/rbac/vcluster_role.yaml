@@ -1,17 +1,13 @@
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: inference-workspace-requester
+  name: inference-workspace-vcluster
 rules:
   - apiGroups:
-      - inference.redhat.com
+      - storage.k8s.io
     resources:
-      - inferenceworkspaces
+      - csistoragecapacities
     verbs:
-      - create
-      - delete
       - get
       - list
-      - patch
-      - update
       - watch

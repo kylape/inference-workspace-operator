@@ -7,25 +7,19 @@ import (
 
 const ReadyCondition = "Ready"
 
-// WorkspaceSubject identifies an identity that receives access to a workspace.
-// +kubebuilder:validation:XValidation:rule="(self.kind == 'User' && !has(self.namespace)) || (self.kind == 'ServiceAccount' && has(self.namespace) && self.namespace != ”)",message="User subjects must omit namespace; ServiceAccount subjects must specify namespace"
-type WorkspaceSubject struct {
-	// Kind is either User or ServiceAccount.
-	// +kubebuilder:validation:Enum=User;ServiceAccount
-	Kind string `json:"kind"`
+type WorkspaceMode string
 
-	// Name is the Kubernetes user or service account name.
-	// +kubebuilder:validation:MinLength=1
-	Name string `json:"name"`
-
-	// Namespace is required for ServiceAccount and omitted for User.
-	Namespace string `json:"namespace,omitempty"`
-}
+const (
+	WorkspaceModeNamespace WorkspaceMode = "Namespace"
+	WorkspaceModeVCluster  WorkspaceMode = "VCluster"
+)
 
 type InferenceWorkspaceSpec struct {
-	// Subjects receive namespaced access to the workspace.
-	// +kubebuilder:validation:MinItems=1
-	Subjects []WorkspaceSubject `json:"subjects"`
+	// Mode selects a direct host namespace or an isolated vCluster.
+	// +kubebuilder:default=Namespace
+	// +kubebuilder:validation:Enum=Namespace;VCluster
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="mode is immutable"
+	Mode WorkspaceMode `json:"mode,omitempty"`
 
 	// ClusterQueue is the Kueue ClusterQueue that backs the workspace's
 	// default LocalQueue.

@@ -7,12 +7,13 @@ for provisioning isolated development and test workspaces. Client tools such as
 `infra` and a future UI create `InferenceWorkspace` resources; the operator
 reconciles the cluster resources needed to make each workspace usable.
 
-The operator owns workspace provisioning and access policy. It does not replace
-Kueue, vCluster, Forge, Fournos, or higher-level lifecycle tools.
+The operator owns cluster-local workspace provisioning. The `infra` service
+owns identity, entitlement, access, and expiration policy. The operator does
+not replace Kueue, Forge, Fournos, or higher-level lifecycle tools.
 
 ## API contract
 
-The initial API is a cluster-scoped `InferenceWorkspace` resource in the
+The API is a cluster-scoped `InferenceWorkspace` resource in the
 `inference.redhat.com/v1alpha1` API group.
 
 ```yaml
@@ -21,27 +22,15 @@ kind: InferenceWorkspace
 metadata:
   name: alice-test
 spec:
+  mode: VCluster
   clusterQueue: inference-workspaces
-  subjects:
-    - kind: User
-      name: alice
-    - kind: ServiceAccount
-      name: ci-runner
-      namespace: ci-system
 ```
 
-Permission to create an `InferenceWorkspace` includes permission to delegate
-access to the users and service accounts listed in `spec.subjects`. The operator
-does not track or authorize the identity that submitted the request. RBAC
-controls which identities may create workspace requests.
-
-Groups are intentionally excluded from the initial API. User subjects use the
-`rbac.authorization.k8s.io` API group. Service account subjects must include a
-namespace and omit the API group.
-
-The initial implementation supports host-cluster namespace workspaces only. A
-future API revision will add an access mode that selects either direct namespace
-access or vCluster access.
+`spec.mode` is immutable and selects `Namespace` or `VCluster`; it defaults to
+`Namespace`. Access subjects are intentionally not part of the API. Only the
+`infra` service account should receive CRUD access to workspace resources, and
+`infra` is responsible for granting users or service accounts the resulting
+workspace access.
 
 ## Namespace reconciliation
 
@@ -55,12 +44,12 @@ already exists and is not controlled by the requesting `InferenceWorkspace`,
 reconciliation fails and the collision is reported through the `Ready`
 condition.
 
-The operator creates a RoleBinding in the workspace namespace that grants each
-subject the operator-owned `inference-workspace-user` ClusterRole. The role
-allows normal application and inference workload management but excludes CRD,
-RBAC, and Kueue queue mutation. It grants read-only access to the workspace's
-LocalQueue and Workloads so users can inspect admission state. Users that
-require their own CRDs will use the future vCluster access mode.
+The operator supplies an `inference-workspace-user` ClusterRole that allows
+normal application and inference workload management but excludes CRD, RBAC,
+and Kueue queue mutation. It grants read-only access to the workspace's
+LocalQueue and Workloads so users can inspect admission state. The `infra`
+service, rather than the operator, decides which identities receive this role.
+Users that require their own CRDs use vCluster mode.
 
 The workspace role is intentionally defined by this operator instead of using
 the built-in `admin` or `edit` roles. Those roles are dynamically extended by
@@ -79,15 +68,36 @@ workload integrations. The cluster's Kueue installation remains responsible
 for enabling the required workload integrations and enforcing management of
 workloads in workspace namespaces.
 
-The operator does not create or manage the ClusterQueue, ResourceFlavors,
-cohorts, or priority policy.
+The operator verifies that the requested ClusterQueue exists but does not
+create or manage ClusterQueues, ResourceFlavors, cohorts, or priority policy.
+The `infra` service maps users and teams to allowed ClusterQueues and refuses
+unauthorized requests before creating a workspace. Workspace users must never
+receive permission to mutate a LocalQueue because doing so could bypass that
+authorization boundary.
 
-The initial implementation accepts any ClusterQueue requested by the workspace
-creator. A future integration with group, team, and user management will check
-that every subject receiving workspace access is entitled to the requested
-ClusterQueue and refuse to provision unauthorized requests. Workspace users
-must never receive permission to create, replace, or modify a LocalQueue,
-because doing so could bypass that authorization boundary.
+## vCluster mode
+
+The operator installs vCluster from the pinned
+`quay.io/klape/charts/vcluster:0.0.1-combined.4` chart with the
+`quay.io/klape/vcluster:csi-capacity-debug-v26` control-plane image. The chart
+is downloaded and checksum-verified while building the operator image, then
+installed from that bundled artifact without runtime registry access.
+
+The chart's cluster role and cluster role binding are disabled. A shared
+operator-owned ClusterRole permits only `get`, `list`, and `watch` of
+`CSIStorageCapacity`, and each vCluster workspace receives a binding from its
+control-plane service account to that role. Other host storage resources are
+not synchronized.
+
+At startup the operator discovers whether `security.openshift.io` is served by
+the cluster. On OpenShift it selects the chart's `restricted` security profile;
+on Kubernetes it leaves the profile at the chart default. Discovery errors are
+fatal so an incompatible profile is never selected silently.
+
+The kubeconfig grants access to the virtual cluster and must not contain host
+cluster credentials. Its Secret reference is published in
+`status.kubeconfigSecretRef` only after both the control plane and credential
+are ready. The `infra` service grants access to that specific Secret.
 
 ## Status
 
@@ -99,7 +109,7 @@ status:
     name: workspace-alice-test
   kubeconfigSecretRef:
     namespace: workspace-alice-test
-    name: workspace-alice-test-kubeconfig
+    name: vc-alice-test
   conditions:
     - type: Ready
       status: "True"
@@ -108,10 +118,10 @@ status:
       message: Workspace is ready
 ```
 
-`namespaceRef` identifies the backing host namespace. The optional
-`kubeconfigSecretRef` is reserved for vCluster mode and is omitted for namespace
-workspaces. `Ready=False` communicates failures through specific reasons such
-as `NamespaceCollision`, `QueueNotReady`, or `ReconciliationFailed`.
+`kubeconfigSecretRef` is populated only for a ready vCluster and is omitted for
+namespace workspaces. `Ready=False` communicates failures through specific
+reasons such as `NamespaceCollision`, `ClusterQueueNotFound`, `QueueNotReady`,
+`VClusterNotReady`, or `ReconciliationFailed`.
 
 Object deletion is represented by `metadata.deletionTimestamp`; no deletion or
 expiration condition is added.
@@ -123,22 +133,9 @@ lifespans by deleting the `InferenceWorkspace` resource.
 
 The operator uses a finalizer to delete the backing namespace. It removes the
 finalizer only after the namespace no longer exists. Deleting the namespace
-also removes the RoleBinding, LocalQueue, and all workspace resources.
-
-The operator continuously restores managed namespace labels, RoleBinding
-subjects, and LocalQueue configuration while the workspace exists.
-
-## Future vCluster mode
-
-vCluster mode will retain the same `InferenceWorkspace` resource and use a
-mutually exclusive access mode. Workspace subjects will not receive general
-access to the backing host namespace. They will receive only `get` permission
-for the specific Secret containing the vCluster kubeconfig, without Secret
-`list` permission.
-
-The kubeconfig grants access to the virtual cluster and must not contain host
-cluster credentials. Its Secret reference will be published in
-`status.kubeconfigSecretRef` only after the credential exists.
+also removes the LocalQueue, vCluster, and all namespaced workspace resources.
+Kubernetes garbage collection removes the workspace-owned vCluster
+ClusterRoleBinding.
 
 ## Delivery
 

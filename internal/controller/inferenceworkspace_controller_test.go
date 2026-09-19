@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	workspacev1alpha1 "github.com/kylape/inference-workspace-operator/api/v1alpha1"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
@@ -24,15 +25,13 @@ func TestReconcileNamespaceWorkspace(t *testing.T) {
 	scheme := testScheme(t)
 	workspace := &workspacev1alpha1.InferenceWorkspace{
 		ObjectMeta: metav1.ObjectMeta{Name: "example", UID: types.UID("workspace-uid")},
-		Spec: workspacev1alpha1.InferenceWorkspaceSpec{Subjects: []workspacev1alpha1.WorkspaceSubject{
-			{Kind: "User", Name: "alice"},
-			{Kind: "ServiceAccount", Name: "runner", Namespace: "ci"},
-		}, ClusterQueue: "development"},
+		Spec:       workspacev1alpha1.InferenceWorkspaceSpec{ClusterQueue: "development"},
 	}
+	clusterQueue := &kueuev1beta2.ClusterQueue{ObjectMeta: metav1.ObjectMeta{Name: "development"}}
 	client := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithStatusSubresource(&workspacev1alpha1.InferenceWorkspace{}).
-		WithObjects(workspace).
+		WithObjects(workspace, clusterQueue).
 		Build()
 	reconciler := &InferenceWorkspaceReconciler{Client: client, Scheme: scheme}
 	request := ctrl.Request{NamespacedName: types.NamespacedName{Name: workspace.Name}}
@@ -51,17 +50,6 @@ func TestReconcileNamespaceWorkspace(t *testing.T) {
 	if namespace.Labels[KueueManagedLabel] != "true" {
 		t.Fatalf("workspace namespace is not labeled for Kueue management: %#v", namespace.Labels)
 	}
-	binding := &rbacv1.RoleBinding{}
-	if err := client.Get(ctx, types.NamespacedName{Name: AccessBindingName, Namespace: namespace.Name}, binding); err != nil {
-		t.Fatalf("workspace RoleBinding: %v", err)
-	}
-	if len(binding.Subjects) != 2 || binding.Subjects[0].APIGroup != rbacv1.GroupName || binding.Subjects[1].Namespace != "ci" {
-		t.Fatalf("unexpected subjects: %#v", binding.Subjects)
-	}
-	if binding.RoleRef.Kind != "ClusterRole" || binding.RoleRef.Name != WorkspaceRoleName {
-		t.Fatalf("unexpected workspace role reference: %#v", binding.RoleRef)
-	}
-
 	queue := &kueuev1beta2.LocalQueue{}
 	if err := client.Get(ctx, types.NamespacedName{Name: LocalQueueName, Namespace: namespace.Name}, queue); err != nil {
 		t.Fatalf("default LocalQueue: %v", err)
@@ -90,9 +78,6 @@ func TestNamespaceCollision(t *testing.T) {
 			UID:        types.UID("workspace-uid"),
 			Finalizers: []string{FinalizerName},
 		},
-		Spec: workspacev1alpha1.InferenceWorkspaceSpec{Subjects: []workspacev1alpha1.WorkspaceSubject{
-			{Kind: "User", Name: "alice"},
-		}},
 	}
 	namespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "workspace-collision"}}
 	client := fake.NewClientBuilder().
@@ -133,6 +118,60 @@ func TestClusterQueueDefaults(t *testing.T) {
 	}
 }
 
+type recordingVClusterInstaller struct {
+	openShift bool
+	calls     int
+}
+
+func (i *recordingVClusterInstaller) Ensure(_ context.Context, _, _ string, openShift bool) error {
+	i.openShift = openShift
+	i.calls++
+	return nil
+}
+
+func TestEnsureVClusterUsesDetectedPlatformAndScopedBinding(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	scheme := testScheme(t)
+	workspace := &workspacev1alpha1.InferenceWorkspace{
+		ObjectMeta: metav1.ObjectMeta{Name: "example", UID: types.UID("workspace-uid")},
+		Spec:       workspacev1alpha1.InferenceWorkspaceSpec{Mode: workspacev1alpha1.WorkspaceModeVCluster},
+	}
+	namespace := "workspace-example"
+	statefulSet := &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{Name: workspace.Name, Namespace: namespace},
+		Status:     appsv1.StatefulSetStatus{ReadyReplicas: 1},
+	}
+	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "vc-example", Namespace: namespace}}
+	client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(workspace, statefulSet, secret).Build()
+	installer := &recordingVClusterInstaller{}
+	reconciler := &InferenceWorkspaceReconciler{
+		Client:            client,
+		Scheme:            scheme,
+		VClusterInstaller: installer,
+		OpenShift:         true,
+	}
+
+	secretRef, ready, err := reconciler.ensureVCluster(ctx, workspace, namespace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ready || secretRef == nil || secretRef.Name != "vc-example" {
+		t.Fatalf("unexpected vCluster readiness: ready=%v secretRef=%#v", ready, secretRef)
+	}
+	if installer.calls != 1 || !installer.openShift {
+		t.Fatalf("installer did not receive OpenShift detection: %#v", installer)
+	}
+	binding := &rbacv1.ClusterRoleBinding{}
+	if err := client.Get(ctx, types.NamespacedName{Name: "example-vcluster"}, binding); err != nil {
+		t.Fatal(err)
+	}
+	if binding.RoleRef.Name != VClusterRoleName || len(binding.Subjects) != 1 ||
+		binding.Subjects[0].Name != "vc-example" || binding.Subjects[0].Namespace != namespace {
+		t.Fatalf("unexpected vCluster binding: %#v", binding)
+	}
+}
+
 func TestWorkspaceRoleCannotMutateLocalQueues(t *testing.T) {
 	t.Parallel()
 	manifest, err := os.ReadFile("../../config/rbac/workspace_role.yaml")
@@ -166,6 +205,31 @@ func TestWorkspaceRoleCannotMutateLocalQueues(t *testing.T) {
 	}
 }
 
+func TestVClusterRoleOnlyReadsCSIStorageCapacity(t *testing.T) {
+	t.Parallel()
+	manifest, err := os.ReadFile("../../config/rbac/vcluster_role.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	role := &rbacv1.ClusterRole{}
+	if err := yaml.Unmarshal(manifest, role); err != nil {
+		t.Fatal(err)
+	}
+	if role.Name != VClusterRoleName || len(role.Rules) != 1 {
+		t.Fatalf("unexpected vCluster role: %#v", role)
+	}
+	rule := role.Rules[0]
+	if len(rule.APIGroups) != 1 || rule.APIGroups[0] != "storage.k8s.io" ||
+		len(rule.Resources) != 1 || rule.Resources[0] != "csistoragecapacities" {
+		t.Fatalf("unexpected vCluster role resources: %#v", rule)
+	}
+	for _, verb := range rule.Verbs {
+		if verb != "get" && verb != "list" && verb != "watch" {
+			t.Fatalf("vCluster role grants mutating verb %q", verb)
+		}
+	}
+}
+
 func contains(values []string, target string) bool {
 	for _, value := range values {
 		if value == target {
@@ -178,6 +242,9 @@ func contains(values []string, target string) bool {
 func testScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()
 	scheme := runtime.NewScheme()
+	if err := appsv1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
 	if err := corev1.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
 	}

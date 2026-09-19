@@ -7,4 +7,5 @@ resources:
   - ../rbac/role_binding.yaml
   - ../rbac/requester_role.yaml
   - ../rbac/workspace_role.yaml
+  - ../rbac/vcluster_role.yaml
   - ../manager/deployment.yaml

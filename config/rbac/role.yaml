@@ -37,15 +37,20 @@ rules:
       - watch
       - create
       - delete
+      - patch
+      - update
   - apiGroups:
       - rbac.authorization.k8s.io
     resources:
+      - clusterrolebindings
       - rolebindings
+      - roles
     verbs:
       - get
       - list
       - watch
       - create
+      - delete
       - update
       - patch
   - apiGroups:
@@ -54,16 +59,83 @@ rules:
       - clusterroles
     resourceNames:
       - inference-workspace-user
+      - inference-workspace-vcluster
     verbs:
       - bind
   - apiGroups:
       - kueue.x-k8s.io
     resources:
       - localqueues
+      - clusterqueues
     verbs:
       - get
       - list
       - watch
+  - apiGroups:
+      - kueue.x-k8s.io
+    resources:
+      - localqueues
+    verbs:
       - create
       - update
       - patch
+  - apiGroups:
+      - ""
+    resources:
+      - configmaps
+      - endpoints
+      - events
+      - persistentvolumeclaims
+      - pods
+      - pods/attach
+      - pods/ephemeralcontainers
+      - pods/exec
+      - pods/log
+      - pods/portforward
+      - pods/status
+      - secrets
+      - serviceaccounts
+      - services
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - apps
+    resources:
+      - deployments
+      - replicasets
+      - statefulsets
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - discovery.k8s.io
+    resources:
+      - endpointslices
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - events.k8s.io
+    resources:
+      - events
+    verbs:
+      - create
+      - get
+      - list
+      - watch

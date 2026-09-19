@@ -3,7 +3,5 @@ kind: InferenceWorkspace
 metadata:
   name: alice-test
 spec:
+  mode: Namespace
   clusterQueue: inference-workspaces
-  subjects:
-    - kind: User
-      name: alice

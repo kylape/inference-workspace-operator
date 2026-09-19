@@ -1,15 +1,20 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"os"
 
 	workspacev1alpha1 "github.com/kylape/inference-workspace-operator/api/v1alpha1"
 	workspacecontroller "github.com/kylape/inference-workspace-operator/internal/controller"
+	workspaceplatform "github.com/kylape/inference-workspace-operator/internal/platform"
+	workspacevcluster "github.com/kylape/inference-workspace-operator/internal/vcluster"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/client-go/discovery"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
@@ -22,6 +27,7 @@ var scheme = runtime.NewScheme()
 
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
+	utilruntime.Must(appsv1.AddToScheme(scheme))
 	utilruntime.Must(corev1.AddToScheme(scheme))
 	utilruntime.Must(rbacv1.AddToScheme(scheme))
 	utilruntime.Must(workspacev1alpha1.AddToScheme(scheme))
@@ -40,7 +46,20 @@ func main() {
 	flag.Parse()
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&zapOptions)))
 
-	manager, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
+	config := ctrl.GetConfigOrDie()
+	discoveryClient, err := discovery.NewDiscoveryClientForConfig(config)
+	if err != nil {
+		ctrl.Log.Error(err, "unable to create discovery client")
+		os.Exit(1)
+	}
+	openShift, err := workspaceplatform.IsOpenShift(context.Background(), discoveryClient)
+	if err != nil {
+		ctrl.Log.Error(err, "unable to determine cluster platform")
+		os.Exit(1)
+	}
+	ctrl.Log.Info("detected cluster platform", "openShift", openShift)
+
+	manager, err := ctrl.NewManager(config, ctrl.Options{
 		Scheme:                 scheme,
 		Metrics:                metricsserver.Options{BindAddress: metricsAddr, SecureServing: true},
 		HealthProbeBindAddress: probeAddr,
@@ -53,8 +72,10 @@ func main() {
 	}
 
 	if err := (&workspacecontroller.InferenceWorkspaceReconciler{
-		Client: manager.GetClient(),
-		Scheme: manager.GetScheme(),
+		Client:            manager.GetClient(),
+		Scheme:            manager.GetScheme(),
+		VClusterInstaller: workspacevcluster.HelmInstaller{},
+		OpenShift:         openShift,
 	}).SetupWithManager(manager); err != nil {
 		ctrl.Log.Error(err, "unable to create controller")
 		os.Exit(1)

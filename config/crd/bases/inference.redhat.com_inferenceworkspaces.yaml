@@ -59,41 +59,17 @@ spec:
                 x-kubernetes-validations:
                 - message: clusterQueue is immutable
                   rule: self == oldSelf
-              subjects:
-                description: Subjects receive namespaced access to the workspace.
-                items:
-                  description: WorkspaceSubject identifies an identity that receives
-                    access to a workspace.
-                  properties:
-                    kind:
-                      description: Kind is either User or ServiceAccount.
-                      enum:
-                      - User
-                      - ServiceAccount
-                      type: string
-                    name:
-                      description: Name is the Kubernetes user or service account
-                        name.
-                      minLength: 1
-                      type: string
-                    namespace:
-                      description: Namespace is required for ServiceAccount and omitted
-                        for User.
-                      type: string
-                  required:
-                  - kind
-                  - name
-                  type: object
-                  x-kubernetes-validations:
-                  - message: User subjects must omit namespace; ServiceAccount subjects
-                      must specify namespace
-                    rule: (self.kind == 'User' && !has(self.namespace)) || (self.kind
-                      == 'ServiceAccount' && has(self.namespace) && self.namespace
-                      != '')
-                minItems: 1
-                type: array
-            required:
-            - subjects
+              mode:
+                default: Namespace
+                description: Mode selects a direct host namespace or an isolated
+                  vCluster.
+                enum:
+                - Namespace
+                - VCluster
+                type: string
+                x-kubernetes-validations:
+                - message: mode is immutable
+                  rule: self == oldSelf
             type: object
           status:
             properties:

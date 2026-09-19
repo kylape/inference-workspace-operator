@@ -7,6 +7,8 @@ import (
 	"time"
 
 	workspacev1alpha1 "github.com/kylape/inference-workspace-operator/api/v1alpha1"
+	workspacevcluster "github.com/kylape/inference-workspace-operator/internal/vcluster"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -23,8 +25,8 @@ import (
 const (
 	FinalizerName           = "inference.redhat.com/workspace-cleanup"
 	NamespacePrefix         = "workspace-"
-	AccessBindingName       = "workspace-access"
 	WorkspaceRoleName       = "inference-workspace-user"
+	VClusterRoleName        = "inference-workspace-vcluster"
 	LocalQueueName          = "default"
 	DefaultClusterQueueName = "inference-workspaces"
 	KueueManagedLabel       = "kueue.openshift.io/managed"
@@ -34,7 +36,9 @@ var ErrNamespaceCollision = errors.New("workspace namespace already exists and i
 
 type InferenceWorkspaceReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme            *runtime.Scheme
+	VClusterInstaller workspacevcluster.Installer
+	OpenShift         bool
 }
 
 func (r *InferenceWorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -63,7 +67,10 @@ func (r *InferenceWorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.R
 		return r.notReady(ctx, workspace, namespaceName, "ReconciliationFailed", err.Error(), 0, err)
 	}
 
-	if err := r.ensureAccess(ctx, workspace, namespaceName); err != nil {
+	if err := r.ensureClusterQueueExists(ctx, workspace); err != nil {
+		if apierrors.IsNotFound(err) {
+			return r.notReady(ctx, workspace, namespaceName, "ClusterQueueNotFound", err.Error(), 30*time.Second, nil)
+		}
 		return r.notReady(ctx, workspace, namespaceName, "ReconciliationFailed", err.Error(), 0, err)
 	}
 
@@ -75,7 +82,19 @@ func (r *InferenceWorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.R
 		return r.notReady(ctx, workspace, namespaceName, "QueueNotReady", "Default LocalQueue is waiting for its ClusterQueue", 5*time.Second, nil)
 	}
 
-	if err := r.setReady(ctx, workspace, namespaceName, metav1.ConditionTrue, "Ready", "Workspace is ready"); err != nil {
+	var kubeconfigSecretRef *corev1.SecretReference
+	if workspaceMode(workspace) == workspacev1alpha1.WorkspaceModeVCluster {
+		secretRef, ready, err := r.ensureVCluster(ctx, workspace, namespaceName)
+		if err != nil {
+			return r.notReady(ctx, workspace, namespaceName, "ReconciliationFailed", err.Error(), 0, err)
+		}
+		if !ready {
+			return r.notReady(ctx, workspace, namespaceName, "VClusterNotReady", "vCluster control plane is starting", 5*time.Second, nil)
+		}
+		kubeconfigSecretRef = secretRef
+	}
+
+	if err := r.setReady(ctx, workspace, namespaceName, kubeconfigSecretRef, metav1.ConditionTrue, "Ready", "Workspace is ready"); err != nil {
 		return ctrl.Result{}, err
 	}
 	return ctrl.Result{}, nil
@@ -130,33 +149,9 @@ func workspaceNamespaceLabels(workspace *workspacev1alpha1.InferenceWorkspace) m
 	}
 }
 
-func (r *InferenceWorkspaceReconciler) ensureAccess(
-	ctx context.Context,
-	workspace *workspacev1alpha1.InferenceWorkspace,
-	namespace string,
-) error {
-	binding := &rbacv1.RoleBinding{
-		ObjectMeta: metav1.ObjectMeta{Name: AccessBindingName, Namespace: namespace},
-	}
-	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, binding, func() error {
-		binding.RoleRef = rbacv1.RoleRef{
-			APIGroup: rbacv1.GroupName,
-			Kind:     "ClusterRole",
-			Name:     WorkspaceRoleName,
-		}
-		binding.Subjects = make([]rbacv1.Subject, 0, len(workspace.Spec.Subjects))
-		for _, subject := range workspace.Spec.Subjects {
-			rbacSubject := rbacv1.Subject{Kind: subject.Kind, Name: subject.Name}
-			if subject.Kind == "User" {
-				rbacSubject.APIGroup = rbacv1.GroupName
-			} else {
-				rbacSubject.Namespace = subject.Namespace
-			}
-			binding.Subjects = append(binding.Subjects, rbacSubject)
-		}
-		return controllerutil.SetControllerReference(workspace, binding, r.Scheme)
-	})
-	return err
+func (r *InferenceWorkspaceReconciler) ensureClusterQueueExists(ctx context.Context, workspace *workspacev1alpha1.InferenceWorkspace) error {
+	queue := &kueuev1beta2.ClusterQueue{}
+	return r.Get(ctx, types.NamespacedName{Name: string(requestedClusterQueue(workspace))}, queue)
 }
 
 func (r *InferenceWorkspaceReconciler) ensureLocalQueue(
@@ -185,6 +180,57 @@ func localQueueActive(queue *kueuev1beta2.LocalQueue) bool {
 	return apimeta.IsStatusConditionTrue(queue.Status.Conditions, kueuev1beta2.LocalQueueActive)
 }
 
+func workspaceMode(workspace *workspacev1alpha1.InferenceWorkspace) workspacev1alpha1.WorkspaceMode {
+	if workspace.Spec.Mode == "" {
+		return workspacev1alpha1.WorkspaceModeNamespace
+	}
+	return workspace.Spec.Mode
+}
+
+func (r *InferenceWorkspaceReconciler) ensureVCluster(
+	ctx context.Context,
+	workspace *workspacev1alpha1.InferenceWorkspace,
+	namespace string,
+) (*corev1.SecretReference, bool, error) {
+	if r.VClusterInstaller == nil {
+		return nil, false, errors.New("vCluster installer is not configured")
+	}
+	binding := &rbacv1.ClusterRoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: workspace.Name + "-vcluster"},
+	}
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, binding, func() error {
+		binding.RoleRef = rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: VClusterRoleName}
+		binding.Subjects = []rbacv1.Subject{{Kind: "ServiceAccount", Name: "vc-" + workspace.Name, Namespace: namespace}}
+		return controllerutil.SetControllerReference(workspace, binding, r.Scheme)
+	})
+	if err != nil {
+		return nil, false, fmt.Errorf("ensure vCluster CSI capacity binding: %w", err)
+	}
+	if err := r.VClusterInstaller.Ensure(ctx, workspace.Name, namespace, r.OpenShift); err != nil {
+		return nil, false, err
+	}
+
+	statefulSet := &appsv1.StatefulSet{}
+	if err := r.Get(ctx, types.NamespacedName{Name: workspace.Name, Namespace: namespace}, statefulSet); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	if statefulSet.Status.ReadyReplicas < 1 {
+		return nil, false, nil
+	}
+	secretName := "vc-" + workspace.Name
+	secret := &corev1.Secret{}
+	if err := r.Get(ctx, types.NamespacedName{Name: secretName, Namespace: namespace}, secret); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	return &corev1.SecretReference{Name: secretName, Namespace: namespace}, true, nil
+}
+
 func (r *InferenceWorkspaceReconciler) notReady(
 	ctx context.Context,
 	workspace *workspacev1alpha1.InferenceWorkspace,
@@ -194,7 +240,7 @@ func (r *InferenceWorkspaceReconciler) notReady(
 	requeueAfter time.Duration,
 	reconcileErr error,
 ) (ctrl.Result, error) {
-	if err := r.setReady(ctx, workspace, namespaceName, metav1.ConditionFalse, reason, message); err != nil {
+	if err := r.setReady(ctx, workspace, namespaceName, nil, metav1.ConditionFalse, reason, message); err != nil {
 		return ctrl.Result{}, err
 	}
 	return ctrl.Result{RequeueAfter: requeueAfter}, reconcileErr
@@ -204,12 +250,14 @@ func (r *InferenceWorkspaceReconciler) setReady(
 	ctx context.Context,
 	workspace *workspacev1alpha1.InferenceWorkspace,
 	namespaceName string,
+	kubeconfigSecretRef *corev1.SecretReference,
 	status metav1.ConditionStatus,
 	reason string,
 	message string,
 ) error {
 	before := workspace.DeepCopy()
 	workspace.Status.NamespaceRef = &corev1.LocalObjectReference{Name: namespaceName}
+	workspace.Status.KubeconfigSecretRef = kubeconfigSecretRef
 	apimeta.SetStatusCondition(&workspace.Status.Conditions, metav1.Condition{
 		Type:               workspacev1alpha1.ReadyCondition,
 		Status:             status,
@@ -251,7 +299,7 @@ func (r *InferenceWorkspaceReconciler) SetupWithManager(mgr ctrl.Manager) error 
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&workspacev1alpha1.InferenceWorkspace{}).
 		Owns(&corev1.Namespace{}).
-		Owns(&rbacv1.RoleBinding{}).
+		Owns(&rbacv1.ClusterRoleBinding{}).
 		Owns(&kueuev1beta2.LocalQueue{}).
 		Complete(r)
 }
