@@ -2,6 +2,18 @@ package vcluster
 
 import "testing"
 
+func TestReleaseDeployed(t *testing.T) {
+	t.Parallel()
+	if !releaseDeployed([]helmRelease{{Name: "test", Status: "deployed"}}) {
+		t.Fatal("deployed release was not recognized")
+	}
+	for _, status := range []string{"failed", "pending-install", "pending-upgrade"} {
+		if releaseDeployed([]helmRelease{{Name: "test", Status: status}}) {
+			t.Fatalf("%s release was treated as deployed", status)
+		}
+	}
+}
+
 func TestInstallArgsSelectRestrictedProfileOnlyForOpenShift(t *testing.T) {
 	t.Parallel()
 	const profile = "controlPlane.statefulSet.security.profile=restricted"

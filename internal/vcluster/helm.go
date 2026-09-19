@@ -24,7 +24,8 @@ type HelmInstaller struct {
 }
 
 type helmRelease struct {
-	Name string `json:"name"`
+	Name   string `json:"name"`
+	Status string `json:"status"`
 }
 
 func (h HelmInstaller) Ensure(ctx context.Context, name, namespace string, openShift bool) error {
@@ -45,7 +46,7 @@ func (h HelmInstaller) Ensure(ctx context.Context, name, namespace string, openS
 	if err := json.Unmarshal(list, &releases); err != nil {
 		return fmt.Errorf("decode Helm release list: %w", err)
 	}
-	if len(releases) > 0 {
+	if releaseDeployed(releases) {
 		return nil
 	}
 
@@ -53,6 +54,10 @@ func (h HelmInstaller) Ensure(ctx context.Context, name, namespace string, openS
 		return fmt.Errorf("install vCluster Helm release: %w", err)
 	}
 	return nil
+}
+
+func releaseDeployed(releases []helmRelease) bool {
+	return len(releases) == 1 && releases[0].Status == "deployed"
 }
 
 func installArgs(name, namespace, chartPath string, openShift bool) []string {
