@@ -23,7 +23,7 @@ func TestInstallArgsLimitHostStorageSync(t *testing.T) {
 	for _, value := range []string{
 		"rbac.clusterRole.enabled=false",
 		"sync.fromHost.csiStorageCapacities.enabled=true",
-		"sync.fromHost.storageClasses.enabled=false",
+		"sync.fromHost.storageClasses.enabled=true",
 		"sync.fromHost.csiNodes.enabled=false",
 		"sync.fromHost.csiDrivers.enabled=false",
 	} {

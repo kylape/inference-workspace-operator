@@ -205,7 +205,7 @@ func TestWorkspaceRoleCannotMutateLocalQueues(t *testing.T) {
 	}
 }
 
-func TestVClusterRoleOnlyReadsCSIStorageCapacity(t *testing.T) {
+func TestVClusterRoleOnlyReadsRequiredStorageDiscovery(t *testing.T) {
 	t.Parallel()
 	manifest, err := os.ReadFile("../../config/rbac/vcluster_role.yaml")
 	if err != nil {
@@ -220,7 +220,8 @@ func TestVClusterRoleOnlyReadsCSIStorageCapacity(t *testing.T) {
 	}
 	rule := role.Rules[0]
 	if len(rule.APIGroups) != 1 || rule.APIGroups[0] != "storage.k8s.io" ||
-		len(rule.Resources) != 1 || rule.Resources[0] != "csistoragecapacities" {
+		len(rule.Resources) != 2 || !contains(rule.Resources, "csistoragecapacities") ||
+		!contains(rule.Resources, "storageclasses") {
 		t.Fatalf("unexpected vCluster role resources: %#v", rule)
 	}
 	for _, verb := range rule.Verbs {

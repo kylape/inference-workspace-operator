@@ -85,9 +85,9 @@ installed from that bundled artifact without runtime registry access.
 
 The chart's cluster role and cluster role binding are disabled. A shared
 operator-owned ClusterRole permits only `get`, `list`, and `watch` of
-`CSIStorageCapacity`, and each vCluster workspace receives a binding from its
-control-plane service account to that role. Other host storage resources are
-not synchronized.
+`StorageClass` and `CSIStorageCapacity`, and each vCluster workspace receives a
+binding from its control-plane service account to that role. `CSINode` and
+`CSIDriver` resources are not synchronized.
 
 At startup the operator discovers whether `security.openshift.io` is served by
 the cluster. On OpenShift it selects the chart's `restricted` security profile;

@@ -64,7 +64,7 @@ func installArgs(name, namespace, chartPath string, openShift bool) []string {
 		"--set-string", "controlPlane.statefulSet.image.tag=csi-capacity-debug-v26",
 		"--set", "rbac.clusterRole.enabled=false",
 		"--set", "sync.fromHost.csiStorageCapacities.enabled=true",
-		"--set", "sync.fromHost.storageClasses.enabled=false",
+		"--set", "sync.fromHost.storageClasses.enabled=true",
 		"--set", "sync.fromHost.csiNodes.enabled=false",
 		"--set", "sync.fromHost.csiDrivers.enabled=false",
 	}

@@ -7,6 +7,7 @@ rules:
       - storage.k8s.io
     resources:
       - csistoragecapacities
+      - storageclasses
     verbs:
       - get
       - list

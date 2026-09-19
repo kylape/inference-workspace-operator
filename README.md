@@ -31,8 +31,8 @@ Creating this resource provisions:
 
 For `VCluster` mode, the operator also installs the pinned vCluster chart and
 publishes its kubeconfig Secret reference in status. The vCluster can read
-host-cluster `CSIStorageCapacity` objects through a dedicated read-only role.
-The chart's own cluster-wide RBAC is disabled.
+host-cluster `StorageClass` and `CSIStorageCapacity` objects through a dedicated
+read-only role. The chart's own cluster-wide RBAC is disabled.
 
 The reusable workspace role does not permit its subjects to mutate LocalQueues,
 cluster RBAC, or CRDs. Kueue queue selection remains controlled by the operator.
