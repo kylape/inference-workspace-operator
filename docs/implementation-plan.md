@@ -75,6 +75,10 @@ unauthorized requests before creating a workspace. Workspace users must never
 receive permission to mutate a LocalQueue because doing so could bypass that
 authorization boundary.
 
+Because the vCluster control plane is itself scheduled in the managed workspace
+namespace, the selected ClusterQueue must cover all of its requested resources,
+including `ephemeral-storage` in addition to CPU and memory.
+
 ## vCluster mode
 
 The operator installs vCluster from the pinned
