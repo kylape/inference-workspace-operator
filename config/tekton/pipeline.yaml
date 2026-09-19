@@ -13,7 +13,7 @@ spec:
       default: main
     - name: image
       type: string
-      default: quay.io/klape/inference-workspace-opeartor:latest
+      default: quay.io/klape/inference-workspace-operator:latest
     - name: push-image
       type: string
       default: "false"
