@@ -7,9 +7,10 @@ for provisioning isolated development and test workspaces. Client tools such as
 `infra` and a future UI create `InferenceWorkspace` resources; the operator
 reconciles the cluster resources needed to make each workspace usable.
 
-The operator owns cluster-local workspace provisioning. The `infra` service
-owns identity, entitlement, access, and expiration policy. The operator does
-not replace Kueue, Forge, Fournos, or higher-level lifecycle tools.
+The operator owns cluster-local workspace provisioning and enforcement of
+workspace access. The `infra` service owns identity, entitlement, subject
+selection, and expiration policy. The operator does not replace Kueue, Forge,
+Fournos, or higher-level lifecycle tools.
 
 ## API contract
 
@@ -24,13 +25,18 @@ metadata:
 spec:
   mode: VCluster
   clusterQueue: inference-workspaces
+  access:
+    subjects:
+      - kind: ServiceAccount
+        namespace: infra-users
+        name: alice
 ```
 
 `spec.mode` is immutable and selects `Namespace` or `VCluster`; it defaults to
-`Namespace`. Access subjects are intentionally not part of the API. Only the
-`infra` service account should receive CRUD access to workspace resources, and
-`infra` is responsible for granting users or service accounts the resulting
-workspace access.
+`Namespace`. Only the `infra` service account should receive CRUD access to
+workspace resources. `infra` selects one or more existing service accounts in
+`spec.access.subjects`, while the operator remains the sole RBAC actuator and
+limits those subjects to mode-appropriate permissions.
 
 ## Namespace reconciliation
 
@@ -44,12 +50,12 @@ already exists and is not controlled by the requesting `InferenceWorkspace`,
 reconciliation fails and the collision is reported through the `Ready`
 condition.
 
-The operator supplies an `inference-workspace-user` ClusterRole that allows
+For namespace mode, the operator binds every declared subject to the
+`inference-workspace-user` ClusterRole. The role allows
 normal application and inference workload management but excludes CRD, RBAC,
 and Kueue queue mutation. It grants read-only access to the workspace's
-LocalQueue and Workloads so users can inspect admission state. The `infra`
-service, rather than the operator, decides which identities receive this role.
-Users that require their own CRDs use vCluster mode.
+LocalQueue and Workloads so users can inspect admission state. Users that
+require their own CRDs use vCluster mode.
 
 The workspace role is intentionally defined by this operator instead of using
 the built-in `admin` or `edit` roles. Those roles are dynamically extended by
@@ -101,7 +107,9 @@ fatal so an incompatible profile is never selected silently.
 The kubeconfig grants access to the virtual cluster and must not contain host
 cluster credentials. Its Secret reference is published in
 `status.kubeconfigSecretRef` only after both the control plane and credential
-are ready. The `infra` service grants access to that specific Secret.
+are ready. The operator creates a namespaced Role limited to `get` on that
+specific Secret and binds the declared access subjects to it. The subjects
+receive no other access to the host workspace namespace.
 
 ## Status
 
@@ -125,7 +133,7 @@ status:
 `kubeconfigSecretRef` is populated only for a ready vCluster and is omitted for
 namespace workspaces. `Ready=False` communicates failures through specific
 reasons such as `NamespaceCollision`, `ClusterQueueNotFound`, `QueueNotReady`,
-`VClusterNotReady`, or `ReconciliationFailed`.
+`AccessSubjectNotFound`, `VClusterNotReady`, or `ReconciliationFailed`.
 
 Object deletion is represented by `metadata.deletionTimestamp`; no deletion or
 expiration condition is added.

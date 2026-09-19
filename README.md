@@ -21,6 +21,11 @@ metadata:
 spec:
   mode: VCluster
   clusterQueue: inference-workspaces
+  access:
+    subjects:
+      - kind: ServiceAccount
+        namespace: infra-users
+        name: alice
 ```
 
 Creating this resource provisions:
@@ -39,10 +44,11 @@ cluster RBAC, or CRDs. Kueue queue selection remains controlled by the operator.
 `spec.clusterQueue` may reference any ClusterQueue in the initial API and
 defaults to `inference-workspaces` when omitted.
 
-The external `infra` service owns user and service-account access. It binds the
-operator-provided workspace role for direct namespace access or grants access
-to the vCluster kubeconfig Secret. Access identities are intentionally absent
-from the `InferenceWorkspace` API.
+The external `infra` service selects entitled service accounts through
+`spec.access.subjects`, but it receives no permission to create RBAC. The
+operator enforces fixed access: direct workspaces bind the
+`inference-workspace-user` ClusterRole, while vCluster workspaces grant only
+`get` on that workspace's kubeconfig Secret.
 
 ## Development
 

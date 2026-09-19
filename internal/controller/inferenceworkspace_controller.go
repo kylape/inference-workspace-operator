@@ -25,6 +25,8 @@ import (
 const (
 	FinalizerName           = "inference.redhat.com/workspace-cleanup"
 	NamespacePrefix         = "workspace-"
+	AccessBindingName       = "workspace-access"
+	VClusterAccessRoleName  = "workspace-kubeconfig-reader"
 	WorkspaceRoleName       = "inference-workspace-user"
 	VClusterRoleName        = "inference-workspace-vcluster"
 	LocalQueueName          = "default"
@@ -33,6 +35,7 @@ const (
 )
 
 var ErrNamespaceCollision = errors.New("workspace namespace already exists and is not controlled by this workspace")
+var ErrAccessSubjectNotFound = errors.New("workspace access subject does not exist")
 
 type InferenceWorkspaceReconciler struct {
 	client.Client
@@ -63,6 +66,12 @@ func (r *InferenceWorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.R
 	if err := r.ensureNamespace(ctx, workspace, namespaceName); err != nil {
 		if errors.Is(err, ErrNamespaceCollision) {
 			return r.notReady(ctx, workspace, namespaceName, "NamespaceCollision", err.Error(), 30*time.Second, nil)
+		}
+		return r.notReady(ctx, workspace, namespaceName, "ReconciliationFailed", err.Error(), 0, err)
+	}
+	if err := r.ensureAccess(ctx, workspace, namespaceName); err != nil {
+		if errors.Is(err, ErrAccessSubjectNotFound) {
+			return r.notReady(ctx, workspace, namespaceName, "AccessSubjectNotFound", err.Error(), 30*time.Second, nil)
 		}
 		return r.notReady(ctx, workspace, namespaceName, "ReconciliationFailed", err.Error(), 0, err)
 	}
@@ -147,6 +156,60 @@ func workspaceNamespaceLabels(workspace *workspacev1alpha1.InferenceWorkspace) m
 		"inference.redhat.com/workspace": workspace.Name,
 		KueueManagedLabel:                "true",
 	}
+}
+
+func (r *InferenceWorkspaceReconciler) ensureAccess(
+	ctx context.Context,
+	workspace *workspacev1alpha1.InferenceWorkspace,
+	namespace string,
+) error {
+	desiredSubjects := make([]rbacv1.Subject, 0, len(workspace.Spec.Access.Subjects))
+	var missingSubject error
+	for _, subject := range workspace.Spec.Access.Subjects {
+		serviceAccount := &corev1.ServiceAccount{}
+		key := types.NamespacedName{Name: subject.Name, Namespace: subject.Namespace}
+		if err := r.Get(ctx, key, serviceAccount); err != nil {
+			if apierrors.IsNotFound(err) {
+				if missingSubject == nil {
+					missingSubject = fmt.Errorf("%w: ServiceAccount %s/%s", ErrAccessSubjectNotFound, subject.Namespace, subject.Name)
+				}
+				continue
+			}
+			return err
+		}
+		desiredSubjects = append(desiredSubjects, rbacv1.Subject{
+			Kind: "ServiceAccount", Name: subject.Name, Namespace: subject.Namespace,
+		})
+	}
+
+	roleRef := rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: WorkspaceRoleName}
+	if workspaceMode(workspace) == workspacev1alpha1.WorkspaceModeVCluster {
+		role := &rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Name: VClusterAccessRoleName, Namespace: namespace}}
+		_, err := controllerutil.CreateOrUpdate(ctx, r.Client, role, func() error {
+			role.Rules = []rbacv1.PolicyRule{{
+				APIGroups:     []string{""},
+				Resources:     []string{"secrets"},
+				ResourceNames: []string{"vc-" + workspace.Name},
+				Verbs:         []string{"get"},
+			}}
+			return controllerutil.SetControllerReference(workspace, role, r.Scheme)
+		})
+		if err != nil {
+			return err
+		}
+		roleRef = rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "Role", Name: VClusterAccessRoleName}
+	}
+
+	binding := &rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: AccessBindingName, Namespace: namespace}}
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, binding, func() error {
+		binding.RoleRef = roleRef
+		binding.Subjects = desiredSubjects
+		return controllerutil.SetControllerReference(workspace, binding, r.Scheme)
+	})
+	if err != nil {
+		return err
+	}
+	return missingSubject
 }
 
 func (r *InferenceWorkspaceReconciler) ensureClusterQueueExists(ctx context.Context, workspace *workspacev1alpha1.InferenceWorkspace) error {
@@ -299,6 +362,8 @@ func (r *InferenceWorkspaceReconciler) SetupWithManager(mgr ctrl.Manager) error 
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&workspacev1alpha1.InferenceWorkspace{}).
 		Owns(&corev1.Namespace{}).
+		Owns(&rbacv1.Role{}).
+		Owns(&rbacv1.RoleBinding{}).
 		Owns(&rbacv1.ClusterRoleBinding{}).
 		Owns(&kueuev1beta2.LocalQueue{}).
 		Complete(r)
