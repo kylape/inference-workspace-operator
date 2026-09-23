@@ -284,7 +284,14 @@ func (r *InferenceWorkspaceReconciler) ensureVCluster(
 	if err != nil {
 		return nil, false, fmt.Errorf("ensure vCluster CSI capacity binding: %w", err)
 	}
-	if err := r.VClusterInstaller.Ensure(ctx, workspace.Name, namespace, r.OpenShift); err != nil {
+	publicHost := ""
+	if r.OpenShift {
+		publicHost, err = r.openShiftVClusterHost(ctx, workspace)
+		if err != nil {
+			return nil, false, fmt.Errorf("discover OpenShift vCluster hostname: %w", err)
+		}
+	}
+	if err := r.VClusterInstaller.Ensure(ctx, workspace.Name, namespace, r.OpenShift, publicHost); err != nil {
 		return nil, false, err
 	}
 
@@ -324,11 +331,10 @@ func (r *InferenceWorkspaceReconciler) ensureOpenShiftVClusterEndpoint(
 	namespace string,
 	internalSecret *corev1.Secret,
 ) (*corev1.SecretReference, error) {
-	appsDomain, err := r.openShiftAppsDomain(ctx)
+	host, err := r.openShiftVClusterHost(ctx, workspace)
 	if err != nil {
-		return nil, fmt.Errorf("discover OpenShift applications domain: %w", err)
+		return nil, err
 	}
-	host := workspace.Name + "." + appsDomain
 
 	if err := r.ensureOpenShiftRoute(ctx, workspace, namespace, host); err != nil {
 		return nil, err
@@ -366,6 +372,17 @@ func (r *InferenceWorkspaceReconciler) ensureOpenShiftVClusterEndpoint(
 	}
 
 	return &corev1.SecretReference{Name: secretName, Namespace: namespace}, nil
+}
+
+func (r *InferenceWorkspaceReconciler) openShiftVClusterHost(
+	ctx context.Context,
+	workspace *workspacev1alpha1.InferenceWorkspace,
+) (string, error) {
+	appsDomain, err := r.openShiftAppsDomain(ctx)
+	if err != nil {
+		return "", fmt.Errorf("discover OpenShift applications domain: %w", err)
+	}
+	return workspace.Name + "." + appsDomain, nil
 }
 
 func (r *InferenceWorkspaceReconciler) openShiftAppsDomain(ctx context.Context) (string, error) {
