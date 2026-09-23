@@ -18,12 +18,12 @@ func TestInstallArgsSelectRestrictedProfileOnlyForOpenShift(t *testing.T) {
 	t.Parallel()
 	const profile = "controlPlane.statefulSet.security.profile=restricted"
 
-	openShiftArgs := installArgs("test", "workspace-test", "chart.tgz", true)
+	openShiftArgs := installArgs("test", "workspace-test", "chart.tgz", true, "")
 	if !contains(openShiftArgs, profile) {
 		t.Fatalf("OpenShift install args do not select restricted profile: %v", openShiftArgs)
 	}
 
-	kubernetesArgs := installArgs("test", "workspace-test", "chart.tgz", false)
+	kubernetesArgs := installArgs("test", "workspace-test", "chart.tgz", false, "")
 	if contains(kubernetesArgs, profile) {
 		t.Fatalf("Kubernetes install args unexpectedly select restricted profile: %v", kubernetesArgs)
 	}
@@ -31,7 +31,7 @@ func TestInstallArgsSelectRestrictedProfileOnlyForOpenShift(t *testing.T) {
 
 func TestInstallArgsLimitHostStorageSync(t *testing.T) {
 	t.Parallel()
-	args := installArgs("test", "workspace-test", "chart.tgz", false)
+	args := installArgs("test", "workspace-test", "chart.tgz", false, "")
 	for _, value := range []string{
 		"rbac.clusterRole.enabled=false",
 		"sync.fromHost.csiStorageCapacities.enabled=true",
@@ -42,6 +42,13 @@ func TestInstallArgsLimitHostStorageSync(t *testing.T) {
 		if !contains(args, value) {
 			t.Fatalf("install args do not contain %q: %v", value, args)
 		}
+	}
+}
+
+func TestInstallArgsAddPublicHostSAN(t *testing.T) {
+	args := installArgs("test", "workspace-test", "chart.tgz", true, "test.apps.example.com")
+	if !contains(args, "controlPlane.proxy.extraSANs[0]=test.apps.example.com") {
+		t.Fatalf("install args do not configure public host SAN: %v", args)
 	}
 }
 
