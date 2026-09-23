@@ -111,6 +111,17 @@ are ready. The operator creates a namespaced Role limited to `get` on that
 specific Secret and binds the declared access subjects to it. The subjects
 receive no other access to the host workspace namespace.
 
+On OpenShift, the operator reads the cluster applications domain from the
+cluster-scoped Ingress configuration and creates a Route named after the
+workspace. The Route uses TLS passthrough to preserve the certificate and CA
+provided by vCluster. The operator leaves the Helm-created kubeconfig Secret
+unchanged and creates an operator-owned copy whose server URL is
+`https://<workspace-name>.<cluster-applications-domain>`. The public hostname
+is explicit rather than relying on the generated
+`<route-name>-<namespace>` form. Certificate SAN configuration for that
+hostname is deferred; the initial implementation deliberately reuses the
+vCluster-provided certificate material.
+
 ## Status
 
 Status remains deliberately compact:
@@ -121,7 +132,7 @@ status:
     name: workspace-alice-test
   kubeconfigSecretRef:
     namespace: workspace-alice-test
-    name: vc-alice-test
+    name: vc-alice-test-external # OpenShift; vc-alice-test elsewhere
   conditions:
     - type: Ready
       status: "True"

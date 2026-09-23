@@ -35,9 +35,15 @@ Creating this resource provisions:
   `inference-workspaces` ClusterQueue.
 
 For `VCluster` mode, the operator also installs the pinned vCluster chart and
-publishes its kubeconfig Secret reference in status. The vCluster can read
-host-cluster `StorageClass` and `CSIStorageCapacity` objects through a dedicated
-read-only role. The chart's own cluster-wide RBAC is disabled.
+publishes its kubeconfig Secret reference in status. On OpenShift, it also
+creates a TLS-passthrough Route at
+`<workspace-name>.<cluster-applications-domain>` and publishes an
+operator-managed copy of the kubeconfig with that public server URL. The copy
+retains the CA and certificate data provided by vCluster; certificate SAN
+handling for the public hostname is intentionally left for a later iteration.
+The vCluster can read host-cluster `StorageClass` and `CSIStorageCapacity`
+objects through a dedicated read-only role. The chart's own cluster-wide RBAC
+is disabled.
 
 The reusable workspace role does not permit its subjects to mutate LocalQueues,
 cluster RBAC, or CRDs. Kueue queue selection remains controlled by the operator.

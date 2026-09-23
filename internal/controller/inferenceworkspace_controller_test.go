@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 
 	workspacev1alpha1 "github.com/kylape/inference-workspace-operator/api/v1alpha1"
@@ -12,7 +13,9 @@ import (
 	rbacv1 "k8s.io/api/rbac/v1"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -212,8 +215,18 @@ func TestEnsureVClusterUsesDetectedPlatformAndScopedBinding(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: workspace.Name, Namespace: namespace},
 		Status:     appsv1.StatefulSetStatus{ReadyReplicas: 1},
 	}
-	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "vc-example", Namespace: namespace}}
-	client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(workspace, statefulSet, secret).Build()
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "vc-example", Namespace: namespace},
+		Data:       map[string][]byte{"config": []byte("apiVersion: v1\nclusters:\n- cluster:\n    certificate-authority-data: Y2E=\n    server: https://vc-example.workspace-example.svc\n  name: vcluster\n")},
+	}
+	ingress := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "config.openshift.io/v1",
+		"kind":       "Ingress",
+		"metadata":   map[string]interface{}{"name": "cluster"},
+		"spec":       map[string]interface{}{"domain": "apps.example.test"},
+	}}
+	ingress.SetGroupVersionKind(schema.GroupVersionKind{Group: "config.openshift.io", Version: "v1", Kind: "Ingress"})
+	client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(workspace, statefulSet, secret, ingress).Build()
 	installer := &recordingVClusterInstaller{}
 	reconciler := &InferenceWorkspaceReconciler{
 		Client:            client,
@@ -226,7 +239,7 @@ func TestEnsureVClusterUsesDetectedPlatformAndScopedBinding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ready || secretRef == nil || secretRef.Name != "vc-example" {
+	if !ready || secretRef == nil || secretRef.Name != "vc-example-external" {
 		t.Fatalf("unexpected vCluster readiness: ready=%v secretRef=%#v", ready, secretRef)
 	}
 	if installer.calls != 1 || !installer.openShift {
@@ -239,6 +252,24 @@ func TestEnsureVClusterUsesDetectedPlatformAndScopedBinding(t *testing.T) {
 	if binding.RoleRef.Name != VClusterRoleName || len(binding.Subjects) != 1 ||
 		binding.Subjects[0].Name != "vc-example" || binding.Subjects[0].Namespace != namespace {
 		t.Fatalf("unexpected vCluster binding: %#v", binding)
+	}
+	route := &unstructured.Unstructured{}
+	route.SetGroupVersionKind(openShiftRouteGVK)
+	if err := client.Get(ctx, types.NamespacedName{Name: "example", Namespace: namespace}, route); err != nil {
+		t.Fatalf("vCluster Route: %v", err)
+	}
+	if host, _, _ := unstructured.NestedString(route.Object, "spec", "host"); host != "example.apps.example.test" {
+		t.Fatalf("Route host = %q, want %q", host, "example.apps.example.test")
+	}
+	if termination, _, _ := unstructured.NestedString(route.Object, "spec", "tls", "termination"); termination != "passthrough" {
+		t.Fatalf("Route TLS termination = %q, want passthrough", termination)
+	}
+	publicSecret := &corev1.Secret{}
+	if err := client.Get(ctx, types.NamespacedName{Name: "vc-example-external", Namespace: namespace}, publicSecret); err != nil {
+		t.Fatalf("public kubeconfig Secret: %v", err)
+	}
+	if !containsString(string(publicSecret.Data["config"]), "https://example.apps.example.test") {
+		t.Fatalf("public kubeconfig server was not rewritten: %s", publicSecret.Data["config"])
 	}
 }
 
@@ -345,6 +376,10 @@ func contains(values []string, target string) bool {
 		}
 	}
 	return false
+}
+
+func containsString(value, target string) bool {
+	return strings.Contains(value, target)
 }
 
 func testAccess(namespace, name string) workspacev1alpha1.WorkspaceAccess {

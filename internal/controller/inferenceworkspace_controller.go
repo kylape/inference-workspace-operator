@@ -14,7 +14,9 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -32,10 +34,16 @@ const (
 	LocalQueueName          = "default"
 	DefaultClusterQueueName = "inference-workspaces"
 	KueueManagedLabel       = "kueue.openshift.io/managed"
+	VClusterKubeconfigKey   = "config"
 )
 
 var ErrNamespaceCollision = errors.New("workspace namespace already exists and is not controlled by this workspace")
 var ErrAccessSubjectNotFound = errors.New("workspace access subject does not exist")
+var ErrRouteCollision = errors.New("vCluster Route already exists and is not controlled by this workspace")
+var ErrKubeconfigSecretCollision = errors.New("public vCluster kubeconfig Secret already exists and is not controlled by this workspace")
+
+var openShiftRouteGVK = schema.GroupVersionKind{Group: "route.openshift.io", Version: "v1", Kind: "Route"}
+var openShiftIngressGVK = schema.GroupVersionKind{Group: "config.openshift.io", Version: "v1", Kind: "Ingress"}
 
 type InferenceWorkspaceReconciler struct {
 	client.Client
@@ -189,7 +197,7 @@ func (r *InferenceWorkspaceReconciler) ensureAccess(
 			role.Rules = []rbacv1.PolicyRule{{
 				APIGroups:     []string{""},
 				Resources:     []string{"secrets"},
-				ResourceNames: []string{"vc-" + workspace.Name},
+				ResourceNames: []string{r.kubeconfigSecretName(workspace)},
 				Verbs:         []string{"get"},
 			}}
 			return controllerutil.SetControllerReference(workspace, role, r.Scheme)
@@ -210,6 +218,13 @@ func (r *InferenceWorkspaceReconciler) ensureAccess(
 		return err
 	}
 	return missingSubject
+}
+
+func (r *InferenceWorkspaceReconciler) kubeconfigSecretName(workspace *workspacev1alpha1.InferenceWorkspace) string {
+	if r.OpenShift && workspaceMode(workspace) == workspacev1alpha1.WorkspaceModeVCluster {
+		return "vc-" + workspace.Name + "-external"
+	}
+	return "vc-" + workspace.Name
 }
 
 func (r *InferenceWorkspaceReconciler) ensureClusterQueueExists(ctx context.Context, workspace *workspacev1alpha1.InferenceWorkspace) error {
@@ -291,7 +306,164 @@ func (r *InferenceWorkspaceReconciler) ensureVCluster(
 		}
 		return nil, false, err
 	}
-	return &corev1.SecretReference{Name: secretName, Namespace: namespace}, true, nil
+
+	if !r.OpenShift {
+		return &corev1.SecretReference{Name: secretName, Namespace: namespace}, true, nil
+	}
+
+	publicSecret, err := r.ensureOpenShiftVClusterEndpoint(ctx, workspace, namespace, secret)
+	if err != nil {
+		return nil, false, err
+	}
+	return publicSecret, true, nil
+}
+
+func (r *InferenceWorkspaceReconciler) ensureOpenShiftVClusterEndpoint(
+	ctx context.Context,
+	workspace *workspacev1alpha1.InferenceWorkspace,
+	namespace string,
+	internalSecret *corev1.Secret,
+) (*corev1.SecretReference, error) {
+	appsDomain, err := r.openShiftAppsDomain(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("discover OpenShift applications domain: %w", err)
+	}
+	host := workspace.Name + "." + appsDomain
+
+	if err := r.ensureOpenShiftRoute(ctx, workspace, namespace, host); err != nil {
+		return nil, err
+	}
+
+	secretName := r.kubeconfigSecretName(workspace)
+	publicSecret := &corev1.Secret{}
+	secretKey := kubeconfigSecretKey(internalSecret)
+	if secretKey == "" {
+		return nil, fmt.Errorf("vCluster Secret %s/%s does not contain a kubeconfig in %q or %q", internalSecret.Namespace, internalSecret.Name, VClusterKubeconfigKey, "kubeconfig")
+	}
+	rewrittenKubeconfig, err := rewriteKubeconfigServer(internalSecret.Data[secretKey], "https://"+host)
+	if err != nil {
+		return nil, fmt.Errorf("rewrite vCluster kubeconfig for Route %s: %w", host, err)
+	}
+
+	publicSecret = &corev1.Secret{}
+	secretKeyRef := types.NamespacedName{Name: secretName, Namespace: namespace}
+	if err := r.Get(ctx, secretKeyRef, publicSecret); err != nil {
+		if !apierrors.IsNotFound(err) {
+			return nil, fmt.Errorf("get public vCluster kubeconfig Secret: %w", err)
+		}
+		publicSecret = &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: secretName, Namespace: namespace}}
+	} else if !metav1.IsControlledBy(publicSecret, workspace) {
+		return nil, fmt.Errorf("%w: %s/%s", ErrKubeconfigSecretCollision, namespace, secretName)
+	}
+	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, publicSecret, func() error {
+		publicSecret.Type = internalSecret.Type
+		publicSecret.Data = copySecretData(internalSecret.Data)
+		publicSecret.Data[secretKey] = rewrittenKubeconfig
+		return controllerutil.SetControllerReference(workspace, publicSecret, r.Scheme)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("ensure public vCluster kubeconfig Secret: %w", err)
+	}
+
+	return &corev1.SecretReference{Name: secretName, Namespace: namespace}, nil
+}
+
+func (r *InferenceWorkspaceReconciler) openShiftAppsDomain(ctx context.Context) (string, error) {
+	ingress := &unstructured.Unstructured{}
+	ingress.SetGroupVersionKind(openShiftIngressGVK)
+	if err := r.Get(ctx, types.NamespacedName{Name: "cluster"}, ingress); err != nil {
+		return "", err
+	}
+	if domain, found, err := unstructured.NestedString(ingress.Object, "spec", "domain"); err != nil {
+		return "", err
+	} else if found && domain != "" {
+		return domain, nil
+	}
+	if domain, found, err := unstructured.NestedString(ingress.Object, "status", "domain"); err != nil {
+		return "", err
+	} else if found && domain != "" {
+		return domain, nil
+	}
+	return "", errors.New("OpenShift Ingress object does not publish an applications domain")
+}
+
+func (r *InferenceWorkspaceReconciler) ensureOpenShiftRoute(
+	ctx context.Context,
+	workspace *workspacev1alpha1.InferenceWorkspace,
+	namespace string,
+	host string,
+) error {
+	route := &unstructured.Unstructured{}
+	route.SetGroupVersionKind(openShiftRouteGVK)
+	routeKey := types.NamespacedName{Name: workspace.Name, Namespace: namespace}
+	if err := r.Get(ctx, routeKey, route); err != nil {
+		if !apierrors.IsNotFound(err) {
+			return fmt.Errorf("get vCluster Route: %w", err)
+		}
+		route = desiredOpenShiftRoute(workspace.Name, namespace, host)
+		if err := controllerutil.SetControllerReference(workspace, route, r.Scheme); err != nil {
+			return err
+		}
+		if err := r.Create(ctx, route); err != nil {
+			return fmt.Errorf("create vCluster Route: %w", err)
+		}
+		return nil
+	}
+	if !metav1.IsControlledBy(route, workspace) {
+		return fmt.Errorf("%w: %s/%s", ErrRouteCollision, namespace, workspace.Name)
+	}
+
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, route, func() error {
+		route.Object["spec"] = desiredOpenShiftRoute(workspace.Name, namespace, host).Object["spec"]
+		return controllerutil.SetControllerReference(workspace, route, r.Scheme)
+	})
+	if err != nil {
+		return fmt.Errorf("update vCluster Route: %w", err)
+	}
+	return nil
+}
+
+func desiredOpenShiftRoute(name, namespace, host string) *unstructured.Unstructured {
+	return &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": openShiftRouteGVK.Group + "/" + openShiftRouteGVK.Version,
+		"kind":       openShiftRouteGVK.Kind,
+		"metadata": map[string]interface{}{
+			"name":      name,
+			"namespace": namespace,
+		},
+		"spec": map[string]interface{}{
+			"host": host,
+			"to": map[string]interface{}{
+				"kind":   "Service",
+				"name":   name,
+				"weight": int64(100),
+			},
+			"port": map[string]interface{}{
+				"targetPort": int64(443),
+			},
+			"tls": map[string]interface{}{
+				"termination": "passthrough",
+			},
+		},
+	}}
+}
+
+func kubeconfigSecretKey(secret *corev1.Secret) string {
+	if _, found := secret.Data[VClusterKubeconfigKey]; found {
+		return VClusterKubeconfigKey
+	}
+	if _, found := secret.Data["kubeconfig"]; found {
+		return "kubeconfig"
+	}
+	return ""
+}
+
+func copySecretData(data map[string][]byte) map[string][]byte {
+	copy := make(map[string][]byte, len(data))
+	for key, value := range data {
+		copy[key] = append([]byte(nil), value...)
+	}
+	return copy
 }
 
 func (r *InferenceWorkspaceReconciler) notReady(
@@ -366,5 +538,11 @@ func (r *InferenceWorkspaceReconciler) SetupWithManager(mgr ctrl.Manager) error 
 		Owns(&rbacv1.RoleBinding{}).
 		Owns(&rbacv1.ClusterRoleBinding{}).
 		Owns(&kueuev1beta2.LocalQueue{}).
+		Owns(&corev1.Secret{}).
+		Owns(func() client.Object {
+			route := &unstructured.Unstructured{}
+			route.SetGroupVersionKind(openShiftRouteGVK)
+			return route
+		}()).
 		Complete(r)
 }
