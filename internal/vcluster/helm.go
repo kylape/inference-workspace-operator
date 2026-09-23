@@ -15,7 +15,7 @@ const (
 )
 
 type Installer interface {
-	Ensure(context.Context, string, string, bool) error
+	Ensure(context.Context, string, string, bool, string) error
 }
 
 type HelmInstaller struct {
@@ -28,7 +28,7 @@ type helmRelease struct {
 	Status string `json:"status"`
 }
 
-func (h HelmInstaller) Ensure(ctx context.Context, name, namespace string, openShift bool) error {
+func (h HelmInstaller) Ensure(ctx context.Context, name, namespace string, openShift bool, publicHost string) error {
 	helmPath := h.HelmPath
 	if helmPath == "" {
 		helmPath = DefaultHelmPath
@@ -46,11 +46,11 @@ func (h HelmInstaller) Ensure(ctx context.Context, name, namespace string, openS
 	if err := json.Unmarshal(list, &releases); err != nil {
 		return fmt.Errorf("decode Helm release list: %w", err)
 	}
-	if releaseDeployed(releases) {
+	if releaseDeployed(releases) && publicHost == "" {
 		return nil
 	}
 
-	if _, err := h.run(ctx, helmPath, installArgs(name, namespace, chartPath, openShift)...); err != nil {
+	if _, err := h.run(ctx, helmPath, installArgs(name, namespace, chartPath, openShift, publicHost)...); err != nil {
 		return fmt.Errorf("install vCluster Helm release: %w", err)
 	}
 	return nil
@@ -60,7 +60,7 @@ func releaseDeployed(releases []helmRelease) bool {
 	return len(releases) == 1 && releases[0].Status == "deployed"
 }
 
-func installArgs(name, namespace, chartPath string, openShift bool) []string {
+func installArgs(name, namespace, chartPath string, openShift bool, publicHost string) []string {
 	args := []string{
 		"upgrade", "--install", name, chartPath,
 		"--namespace", namespace,
@@ -75,6 +75,9 @@ func installArgs(name, namespace, chartPath string, openShift bool) []string {
 	}
 	if openShift {
 		args = append(args, "--set-string", "controlPlane.statefulSet.security.profile=restricted")
+	}
+	if publicHost != "" {
+		args = append(args, "--set-string", "controlPlane.proxy.extraSANs[0]="+publicHost)
 	}
 	return args
 }
