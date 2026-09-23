@@ -439,7 +439,7 @@ func desiredOpenShiftRoute(name, namespace, host string) *unstructured.Unstructu
 				"weight": int64(100),
 			},
 			"port": map[string]interface{}{
-				"targetPort": int64(443),
+				"targetPort": "https",
 			},
 			"tls": map[string]interface{}{
 				"termination": "passthrough",
