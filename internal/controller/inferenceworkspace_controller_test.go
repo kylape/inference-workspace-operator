@@ -192,12 +192,14 @@ func TestClusterQueueDefaults(t *testing.T) {
 }
 
 type recordingVClusterInstaller struct {
-	openShift bool
-	calls     int
+	openShift  bool
+	publicHost string
+	calls      int
 }
 
-func (i *recordingVClusterInstaller) Ensure(_ context.Context, _, _ string, openShift bool) error {
+func (i *recordingVClusterInstaller) Ensure(_ context.Context, _, _ string, openShift bool, publicHost string) error {
 	i.openShift = openShift
+	i.publicHost = publicHost
 	i.calls++
 	return nil
 }
@@ -242,7 +244,7 @@ func TestEnsureVClusterUsesDetectedPlatformAndScopedBinding(t *testing.T) {
 	if !ready || secretRef == nil || secretRef.Name != "vc-example-external" {
 		t.Fatalf("unexpected vCluster readiness: ready=%v secretRef=%#v", ready, secretRef)
 	}
-	if installer.calls != 1 || !installer.openShift {
+	if installer.calls != 1 || !installer.openShift || installer.publicHost != "example.apps.example.test" {
 		t.Fatalf("installer did not receive OpenShift detection: %#v", installer)
 	}
 	binding := &rbacv1.ClusterRoleBinding{}
