@@ -28,7 +28,7 @@ func TestReconcileNamespaceWorkspace(t *testing.T) {
 	ctx := context.Background()
 	scheme := testScheme(t)
 	workspace := &workspacev1alpha1.InferenceWorkspace{
-		ObjectMeta: metav1.ObjectMeta{Name: "example", UID: types.UID("workspace-uid")},
+		ObjectMeta: metav1.ObjectMeta{Name: "example", Namespace: "requests", UID: types.UID("workspace-uid")},
 		Spec: workspacev1alpha1.InferenceWorkspaceSpec{
 			Access:       testAccess("access", "alice"),
 			ClusterQueue: "development",
@@ -42,7 +42,7 @@ func TestReconcileNamespaceWorkspace(t *testing.T) {
 		WithObjects(workspace, clusterQueue, serviceAccount).
 		Build()
 	reconciler := &InferenceWorkspaceReconciler{Client: client, Scheme: scheme}
-	request := ctrl.Request{NamespacedName: types.NamespacedName{Name: workspace.Name}}
+	request := ctrl.Request{NamespacedName: types.NamespacedName{Name: workspace.Name, Namespace: workspace.Namespace}}
 
 	if _, err := reconciler.Reconcile(ctx, request); err != nil {
 		t.Fatalf("adding finalizer: %v", err)
@@ -57,6 +57,9 @@ func TestReconcileNamespaceWorkspace(t *testing.T) {
 	}
 	if namespace.Labels[KueueManagedLabel] != "true" {
 		t.Fatalf("workspace namespace is not labeled for Kueue management: %#v", namespace.Labels)
+	}
+	if !workspaceOwns(namespace, workspace) || len(namespace.OwnerReferences) != 0 {
+		t.Fatalf("workspace namespace has unexpected ownership metadata: annotations=%#v owners=%#v", namespace.Annotations, namespace.OwnerReferences)
 	}
 	binding := &rbacv1.RoleBinding{}
 	if err := client.Get(ctx, types.NamespacedName{Name: AccessBindingName, Namespace: namespace.Name}, binding); err != nil {
@@ -91,6 +94,7 @@ func TestNamespaceCollision(t *testing.T) {
 	workspace := &workspacev1alpha1.InferenceWorkspace{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "collision",
+			Namespace:  "requests",
 			UID:        types.UID("workspace-uid"),
 			Finalizers: []string{FinalizerName},
 		},
@@ -104,11 +108,11 @@ func TestNamespaceCollision(t *testing.T) {
 		Build()
 	reconciler := &InferenceWorkspaceReconciler{Client: client, Scheme: scheme}
 
-	if _, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: workspace.Name}}); err != nil {
+	if _, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: workspace.Name, Namespace: workspace.Namespace}}); err != nil {
 		t.Fatalf("reconcile collision: %v", err)
 	}
 	current := &workspacev1alpha1.InferenceWorkspace{}
-	if err := client.Get(ctx, types.NamespacedName{Name: workspace.Name}, current); err != nil {
+	if err := client.Get(ctx, types.NamespacedName{Name: workspace.Name, Namespace: workspace.Namespace}, current); err != nil {
 		t.Fatalf("workspace status: %v", err)
 	}
 	ready := apimeta.FindStatusCondition(current.Status.Conditions, workspacev1alpha1.ReadyCondition)
@@ -122,7 +126,7 @@ func TestMissingAccessSubjectIsReported(t *testing.T) {
 	ctx := context.Background()
 	scheme := testScheme(t)
 	workspace := &workspacev1alpha1.InferenceWorkspace{
-		ObjectMeta: metav1.ObjectMeta{Name: "missing", UID: types.UID("workspace-uid"), Finalizers: []string{FinalizerName}},
+		ObjectMeta: metav1.ObjectMeta{Name: "missing", Namespace: "requests", UID: types.UID("workspace-uid"), Finalizers: []string{FinalizerName}},
 		Spec:       workspacev1alpha1.InferenceWorkspaceSpec{Access: testAccess("access", "missing")},
 	}
 	client := fake.NewClientBuilder().WithScheme(scheme).
@@ -130,11 +134,11 @@ func TestMissingAccessSubjectIsReported(t *testing.T) {
 		WithObjects(workspace).Build()
 	reconciler := &InferenceWorkspaceReconciler{Client: client, Scheme: scheme}
 
-	if _, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: workspace.Name}}); err != nil {
+	if _, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: workspace.Name, Namespace: workspace.Namespace}}); err != nil {
 		t.Fatal(err)
 	}
 	current := &workspacev1alpha1.InferenceWorkspace{}
-	if err := client.Get(ctx, types.NamespacedName{Name: workspace.Name}, current); err != nil {
+	if err := client.Get(ctx, types.NamespacedName{Name: workspace.Name, Namespace: workspace.Namespace}, current); err != nil {
 		t.Fatal(err)
 	}
 	ready := apimeta.FindStatusCondition(current.Status.Conditions, workspacev1alpha1.ReadyCondition)
@@ -148,7 +152,7 @@ func TestMissingReplacementSubjectRevokesPreviousAccess(t *testing.T) {
 	ctx := context.Background()
 	scheme := testScheme(t)
 	workspace := &workspacev1alpha1.InferenceWorkspace{
-		ObjectMeta: metav1.ObjectMeta{Name: "revoke", UID: types.UID("workspace-uid")},
+		ObjectMeta: metav1.ObjectMeta{Name: "revoke", Namespace: "requests", UID: types.UID("workspace-uid")},
 		Spec:       workspacev1alpha1.InferenceWorkspaceSpec{Access: testAccess("access", "alice")},
 	}
 	alice := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: "alice", Namespace: "access"}}
@@ -209,7 +213,7 @@ func TestEnsureVClusterUsesDetectedPlatformAndScopedBinding(t *testing.T) {
 	ctx := context.Background()
 	scheme := testScheme(t)
 	workspace := &workspacev1alpha1.InferenceWorkspace{
-		ObjectMeta: metav1.ObjectMeta{Name: "example", UID: types.UID("workspace-uid")},
+		ObjectMeta: metav1.ObjectMeta{Name: "example", Namespace: "requests", UID: types.UID("workspace-uid")},
 		Spec:       workspacev1alpha1.InferenceWorkspaceSpec{Mode: workspacev1alpha1.WorkspaceModeVCluster},
 	}
 	namespace := "workspace-example"
@@ -255,6 +259,9 @@ func TestEnsureVClusterUsesDetectedPlatformAndScopedBinding(t *testing.T) {
 		binding.Subjects[0].Name != "vc-example" || binding.Subjects[0].Namespace != namespace {
 		t.Fatalf("unexpected vCluster binding: %#v", binding)
 	}
+	if !workspaceOwns(binding, workspace) || len(binding.OwnerReferences) != 0 {
+		t.Fatalf("vCluster binding has unexpected ownership metadata: annotations=%#v owners=%#v", binding.Annotations, binding.OwnerReferences)
+	}
 	route := &unstructured.Unstructured{}
 	route.SetGroupVersionKind(openShiftRouteGVK)
 	if err := client.Get(ctx, types.NamespacedName{Name: "example", Namespace: namespace}, route); err != nil {
@@ -280,7 +287,7 @@ func TestEnsureVClusterAccessOnlyReadsKubeconfigSecret(t *testing.T) {
 	ctx := context.Background()
 	scheme := testScheme(t)
 	workspace := &workspacev1alpha1.InferenceWorkspace{
-		ObjectMeta: metav1.ObjectMeta{Name: "example", UID: types.UID("workspace-uid")},
+		ObjectMeta: metav1.ObjectMeta{Name: "example", Namespace: "requests", UID: types.UID("workspace-uid")},
 		Spec: workspacev1alpha1.InferenceWorkspaceSpec{
 			Access: testAccess("access", "alice"),
 			Mode:   workspacev1alpha1.WorkspaceModeVCluster,

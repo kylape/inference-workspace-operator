@@ -74,7 +74,7 @@ type InferenceWorkspaceStatus struct {
 }
 
 // +kubebuilder:object:root=true
-// +kubebuilder:resource:scope=Cluster,shortName=iw
+// +kubebuilder:resource:scope=Namespaced,shortName=iw
 // +kubebuilder:subresource:status
 // +kubebuilder:validation:XValidation:rule="size(self.metadata.name) <= 53",message="workspace names must be at most 53 characters to allow the workspace- prefix"
 // +kubebuilder:printcolumn:name="Ready",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status"

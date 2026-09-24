@@ -14,14 +14,18 @@ Fournos, or higher-level lifecycle tools.
 
 ## API contract
 
-The API is a cluster-scoped `InferenceWorkspace` resource in the
-`inference.redhat.com/v1alpha1` API group.
+The API is a namespaced `InferenceWorkspace` resource in the
+`inference.redhat.com/v1alpha1` API group. The resource namespace is the
+control namespace for the request. The infra service may manage resources
+across namespaces, while direct users can be granted access to only their
+control namespace.
 
 ```yaml
 apiVersion: inference.redhat.com/v1alpha1
 kind: InferenceWorkspace
 metadata:
   name: alice-test
+  namespace: alice-dev
 spec:
   mode: VCluster
   clusterQueue: inference-workspaces
@@ -33,10 +37,12 @@ spec:
 ```
 
 `spec.mode` is immutable and selects `Namespace` or `VCluster`; it defaults to
-`Namespace`. Only the `infra` service account should receive CRUD access to
-workspace resources. `infra` selects one or more existing service accounts in
-`spec.access.subjects`, while the operator remains the sole RBAC actuator and
-limits those subjects to mode-appropriate permissions.
+`Namespace`. The `infra` service account may receive cluster-wide CRUD access
+to the namespaced workspace resources. Direct users can instead receive CRUD
+access only within a GitOps-provisioned control namespace. `infra` selects one
+or more existing service accounts in `spec.access.subjects`, while the operator
+remains the sole RBAC actuator and limits those subjects to mode-appropriate
+permissions.
 
 ## Namespace reconciliation
 

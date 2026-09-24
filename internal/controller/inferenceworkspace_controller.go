@@ -25,22 +25,28 @@ import (
 )
 
 const (
-	FinalizerName           = "inference.redhat.com/workspace-cleanup"
-	NamespacePrefix         = "workspace-"
-	AccessBindingName       = "workspace-access"
-	VClusterAccessRoleName  = "workspace-kubeconfig-reader"
-	WorkspaceRoleName       = "inference-workspace-user"
-	VClusterRoleName        = "inference-workspace-vcluster"
-	LocalQueueName          = "default"
-	DefaultClusterQueueName = "inference-workspaces"
-	KueueManagedLabel       = "kueue.openshift.io/managed"
-	VClusterKubeconfigKey   = "config"
+	FinalizerName            = "inference.redhat.com/workspace-cleanup"
+	NamespacePrefix          = "workspace-"
+	WorkspaceOwnerAnnotation = "inference.redhat.com/workspace-owner"
+	WorkspaceUIDAnnotation   = "inference.redhat.com/workspace-uid"
+	AccessBindingName        = "workspace-access"
+	VClusterAccessRoleName   = "workspace-kubeconfig-reader"
+	WorkspaceRoleName        = "inference-workspace-user"
+	VClusterRoleName         = "inference-workspace-vcluster"
+	LocalQueueName           = "default"
+	DefaultClusterQueueName  = "inference-workspaces"
+	KueueManagedLabel        = "kueue.openshift.io/managed"
+	VClusterKubeconfigKey    = "config"
 )
 
 var ErrNamespaceCollision = errors.New("workspace namespace already exists and is not controlled by this workspace")
 var ErrAccessSubjectNotFound = errors.New("workspace access subject does not exist")
 var ErrRouteCollision = errors.New("vCluster Route already exists and is not controlled by this workspace")
 var ErrKubeconfigSecretCollision = errors.New("public vCluster kubeconfig Secret already exists and is not controlled by this workspace")
+var ErrVClusterBindingCollision = errors.New("vCluster ClusterRoleBinding already exists and is not controlled by this workspace")
+var ErrAccessRoleCollision = errors.New("workspace access Role already exists and is not controlled by this workspace")
+var ErrAccessBindingCollision = errors.New("workspace access RoleBinding already exists and is not controlled by this workspace")
+var ErrLocalQueueCollision = errors.New("workspace LocalQueue already exists and is not controlled by this workspace")
 
 var openShiftRouteGVK = schema.GroupVersionKind{Group: "route.openshift.io", Version: "v1", Kind: "Route"}
 var openShiftIngressGVK = schema.GroupVersionKind{Group: "config.openshift.io", Version: "v1", Kind: "Ingress"}
@@ -127,19 +133,17 @@ func (r *InferenceWorkspaceReconciler) ensureNamespace(
 	if apierrors.IsNotFound(err) {
 		namespace = &corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:   name,
-				Labels: workspaceNamespaceLabels(workspace),
+				Name:        name,
+				Labels:      workspaceNamespaceLabels(workspace),
+				Annotations: workspaceOwnershipAnnotations(workspace),
 			},
-		}
-		if err := controllerutil.SetControllerReference(workspace, namespace, r.Scheme); err != nil {
-			return err
 		}
 		return r.Create(ctx, namespace)
 	}
 	if err != nil {
 		return err
 	}
-	if !metav1.IsControlledBy(namespace, workspace) {
+	if !workspaceOwns(namespace, workspace) {
 		return fmt.Errorf("%w: %s", ErrNamespaceCollision, name)
 	}
 	if namespace.Labels == nil {
@@ -149,6 +153,15 @@ func (r *InferenceWorkspaceReconciler) ensureNamespace(
 	for key, value := range workspaceNamespaceLabels(workspace) {
 		if namespace.Labels[key] != value {
 			namespace.Labels[key] = value
+			changed = true
+		}
+	}
+	for key, value := range workspaceOwnershipAnnotations(workspace) {
+		if namespace.Annotations == nil || namespace.Annotations[key] != value {
+			if namespace.Annotations == nil {
+				namespace.Annotations = make(map[string]string)
+			}
+			namespace.Annotations[key] = value
 			changed = true
 		}
 	}
@@ -164,6 +177,30 @@ func workspaceNamespaceLabels(workspace *workspacev1alpha1.InferenceWorkspace) m
 		"inference.redhat.com/workspace": workspace.Name,
 		KueueManagedLabel:                "true",
 	}
+}
+
+func workspaceOwnershipAnnotations(workspace *workspacev1alpha1.InferenceWorkspace) map[string]string {
+	return map[string]string{
+		WorkspaceOwnerAnnotation: workspace.Namespace + "/" + workspace.Name,
+		WorkspaceUIDAnnotation:   string(workspace.UID),
+	}
+}
+
+func workspaceOwns(object metav1.Object, workspace *workspacev1alpha1.InferenceWorkspace) bool {
+	annotations := object.GetAnnotations()
+	return annotations[WorkspaceOwnerAnnotation] == workspace.Namespace+"/"+workspace.Name &&
+		annotations[WorkspaceUIDAnnotation] == string(workspace.UID)
+}
+
+func markWorkspaceOwned(object metav1.Object, workspace *workspacev1alpha1.InferenceWorkspace) {
+	annotations := object.GetAnnotations()
+	if annotations == nil {
+		annotations = make(map[string]string)
+	}
+	for key, value := range workspaceOwnershipAnnotations(workspace) {
+		annotations[key] = value
+	}
+	object.SetAnnotations(annotations)
 }
 
 func (r *InferenceWorkspaceReconciler) ensureAccess(
@@ -193,6 +230,11 @@ func (r *InferenceWorkspaceReconciler) ensureAccess(
 	roleRef := rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: WorkspaceRoleName}
 	if workspaceMode(workspace) == workspacev1alpha1.WorkspaceModeVCluster {
 		role := &rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Name: VClusterAccessRoleName, Namespace: namespace}}
+		if err := r.Get(ctx, types.NamespacedName{Name: VClusterAccessRoleName, Namespace: namespace}, role); err != nil && !apierrors.IsNotFound(err) {
+			return err
+		} else if err == nil && !workspaceOwns(role, workspace) {
+			return fmt.Errorf("%w: %s/%s", ErrAccessRoleCollision, namespace, VClusterAccessRoleName)
+		}
 		_, err := controllerutil.CreateOrUpdate(ctx, r.Client, role, func() error {
 			role.Rules = []rbacv1.PolicyRule{{
 				APIGroups:     []string{""},
@@ -200,7 +242,8 @@ func (r *InferenceWorkspaceReconciler) ensureAccess(
 				ResourceNames: []string{r.kubeconfigSecretName(workspace)},
 				Verbs:         []string{"get"},
 			}}
-			return controllerutil.SetControllerReference(workspace, role, r.Scheme)
+			markWorkspaceOwned(role, workspace)
+			return nil
 		})
 		if err != nil {
 			return err
@@ -209,10 +252,16 @@ func (r *InferenceWorkspaceReconciler) ensureAccess(
 	}
 
 	binding := &rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: AccessBindingName, Namespace: namespace}}
+	if err := r.Get(ctx, types.NamespacedName{Name: AccessBindingName, Namespace: namespace}, binding); err != nil && !apierrors.IsNotFound(err) {
+		return err
+	} else if err == nil && !workspaceOwns(binding, workspace) {
+		return fmt.Errorf("%w: %s/%s", ErrAccessBindingCollision, namespace, AccessBindingName)
+	}
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, binding, func() error {
 		binding.RoleRef = roleRef
 		binding.Subjects = desiredSubjects
-		return controllerutil.SetControllerReference(workspace, binding, r.Scheme)
+		markWorkspaceOwned(binding, workspace)
+		return nil
 	})
 	if err != nil {
 		return err
@@ -240,9 +289,15 @@ func (r *InferenceWorkspaceReconciler) ensureLocalQueue(
 	queue := &kueuev1beta2.LocalQueue{
 		ObjectMeta: metav1.ObjectMeta{Name: LocalQueueName, Namespace: namespace},
 	}
+	if err := r.Get(ctx, types.NamespacedName{Name: LocalQueueName, Namespace: namespace}, queue); err != nil && !apierrors.IsNotFound(err) {
+		return nil, err
+	} else if err == nil && !workspaceOwns(queue, workspace) {
+		return nil, fmt.Errorf("%w: %s/%s", ErrLocalQueueCollision, namespace, LocalQueueName)
+	}
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, queue, func() error {
 		queue.Spec.ClusterQueue = requestedClusterQueue(workspace)
-		return controllerutil.SetControllerReference(workspace, queue, r.Scheme)
+		markWorkspaceOwned(queue, workspace)
+		return nil
 	})
 	return queue, err
 }
@@ -273,13 +328,18 @@ func (r *InferenceWorkspaceReconciler) ensureVCluster(
 	if r.VClusterInstaller == nil {
 		return nil, false, errors.New("vCluster installer is not configured")
 	}
-	binding := &rbacv1.ClusterRoleBinding{
-		ObjectMeta: metav1.ObjectMeta{Name: workspace.Name + "-vcluster"},
+	bindingName := workspace.Name + "-vcluster"
+	binding := &rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: bindingName}}
+	if err := r.Get(ctx, types.NamespacedName{Name: bindingName}, binding); err != nil && !apierrors.IsNotFound(err) {
+		return nil, false, fmt.Errorf("get vCluster CSI capacity binding: %w", err)
+	} else if err == nil && !workspaceOwns(binding, workspace) {
+		return nil, false, fmt.Errorf("%w: %s", ErrVClusterBindingCollision, bindingName)
 	}
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, binding, func() error {
 		binding.RoleRef = rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: VClusterRoleName}
 		binding.Subjects = []rbacv1.Subject{{Kind: "ServiceAccount", Name: "vc-" + workspace.Name, Namespace: namespace}}
-		return controllerutil.SetControllerReference(workspace, binding, r.Scheme)
+		markWorkspaceOwned(binding, workspace)
+		return nil
 	})
 	if err != nil {
 		return nil, false, fmt.Errorf("ensure vCluster CSI capacity binding: %w", err)
@@ -358,14 +418,15 @@ func (r *InferenceWorkspaceReconciler) ensureOpenShiftVClusterEndpoint(
 			return nil, fmt.Errorf("get public vCluster kubeconfig Secret: %w", err)
 		}
 		publicSecret = &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: secretName, Namespace: namespace}}
-	} else if !metav1.IsControlledBy(publicSecret, workspace) {
+	} else if !workspaceOwns(publicSecret, workspace) {
 		return nil, fmt.Errorf("%w: %s/%s", ErrKubeconfigSecretCollision, namespace, secretName)
 	}
 	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, publicSecret, func() error {
 		publicSecret.Type = internalSecret.Type
 		publicSecret.Data = copySecretData(internalSecret.Data)
 		publicSecret.Data[secretKey] = rewrittenKubeconfig
-		return controllerutil.SetControllerReference(workspace, publicSecret, r.Scheme)
+		markWorkspaceOwned(publicSecret, workspace)
+		return nil
 	})
 	if err != nil {
 		return nil, fmt.Errorf("ensure public vCluster kubeconfig Secret: %w", err)
@@ -418,21 +479,20 @@ func (r *InferenceWorkspaceReconciler) ensureOpenShiftRoute(
 			return fmt.Errorf("get vCluster Route: %w", err)
 		}
 		route = desiredOpenShiftRoute(workspace.Name, namespace, host)
-		if err := controllerutil.SetControllerReference(workspace, route, r.Scheme); err != nil {
-			return err
-		}
+		markWorkspaceOwned(route, workspace)
 		if err := r.Create(ctx, route); err != nil {
 			return fmt.Errorf("create vCluster Route: %w", err)
 		}
 		return nil
 	}
-	if !metav1.IsControlledBy(route, workspace) {
+	if !workspaceOwns(route, workspace) {
 		return fmt.Errorf("%w: %s/%s", ErrRouteCollision, namespace, workspace.Name)
 	}
 
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, route, func() error {
 		route.Object["spec"] = desiredOpenShiftRoute(workspace.Name, namespace, host).Object["spec"]
-		return controllerutil.SetControllerReference(workspace, route, r.Scheme)
+		markWorkspaceOwned(route, workspace)
+		return nil
 	})
 	if err != nil {
 		return fmt.Errorf("update vCluster Route: %w", err)
@@ -529,9 +589,22 @@ func (r *InferenceWorkspaceReconciler) finalize(
 		return ctrl.Result{}, nil
 	}
 
+	binding := &rbacv1.ClusterRoleBinding{}
+	bindingName := workspace.Name + "-vcluster"
+	err := r.Get(ctx, types.NamespacedName{Name: bindingName}, binding)
+	if err == nil && workspaceOwns(binding, workspace) {
+		if err := r.Delete(ctx, binding); err != nil && !apierrors.IsNotFound(err) {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{RequeueAfter: 2 * time.Second}, nil
+	}
+	if err != nil && !apierrors.IsNotFound(err) {
+		return ctrl.Result{}, err
+	}
+
 	namespace := &corev1.Namespace{}
-	err := r.Get(ctx, types.NamespacedName{Name: namespaceName}, namespace)
-	if err == nil && metav1.IsControlledBy(namespace, workspace) {
+	err = r.Get(ctx, types.NamespacedName{Name: namespaceName}, namespace)
+	if err == nil && workspaceOwns(namespace, workspace) {
 		if namespace.DeletionTimestamp == nil {
 			if err := r.Delete(ctx, namespace); err != nil && !apierrors.IsNotFound(err) {
 				return ctrl.Result{}, err
@@ -550,16 +623,5 @@ func (r *InferenceWorkspaceReconciler) finalize(
 func (r *InferenceWorkspaceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&workspacev1alpha1.InferenceWorkspace{}).
-		Owns(&corev1.Namespace{}).
-		Owns(&rbacv1.Role{}).
-		Owns(&rbacv1.RoleBinding{}).
-		Owns(&rbacv1.ClusterRoleBinding{}).
-		Owns(&kueuev1beta2.LocalQueue{}).
-		Owns(&corev1.Secret{}).
-		Owns(func() client.Object {
-			route := &unstructured.Unstructured{}
-			route.SetGroupVersionKind(openShiftRouteGVK)
-			return route
-		}()).
 		Complete(r)
 }

@@ -6,7 +6,9 @@ between clients such as `infra` or a future UI and cluster services such as
 Kueue and vCluster.
 
 The operator provisions either a host-cluster namespace or a vCluster for each
-cluster-scoped `InferenceWorkspace` resource.
+namespaced `InferenceWorkspace` resource. The resource namespace is the control
+boundary: the infra service can manage workspaces across namespaces, while
+direct users can be limited to a namespace by ordinary Kubernetes RBAC.
 
 See the [implementation plan](docs/implementation-plan.md) for the API and
 ownership decisions.
@@ -18,6 +20,7 @@ apiVersion: inference.redhat.com/v1alpha1
 kind: InferenceWorkspace
 metadata:
   name: alice-test
+  namespace: alice-dev
 spec:
   mode: VCluster
   clusterQueue: inference-workspaces

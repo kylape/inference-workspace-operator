@@ -2,6 +2,7 @@ apiVersion: inference.redhat.com/v1alpha1
 kind: InferenceWorkspace
 metadata:
   name: alice-test
+  namespace: alice-dev
 spec:
   mode: Namespace
   clusterQueue: inference-workspaces
