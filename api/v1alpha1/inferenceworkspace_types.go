@@ -14,37 +14,7 @@ const (
 	WorkspaceModeVCluster  WorkspaceMode = "VCluster"
 )
 
-type WorkspaceSubject struct {
-	// Kind is currently limited to ServiceAccount.
-	// +kubebuilder:validation:Enum=ServiceAccount
-	Kind string `json:"kind"`
-
-	// Name is the service account name.
-	// +kubebuilder:validation:MaxLength=253
-	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`
-	Name string `json:"name"`
-
-	// Namespace is the service account namespace.
-	// +kubebuilder:validation:MaxLength=63
-	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
-	Namespace string `json:"namespace"`
-}
-
-type WorkspaceAccess struct {
-	// Subjects are service accounts that receive mode-appropriate workspace access.
-	// +kubebuilder:validation:MinItems=1
-	// +kubebuilder:validation:MaxItems=32
-	// +listType=map
-	// +listMapKey=kind
-	// +listMapKey=namespace
-	// +listMapKey=name
-	Subjects []WorkspaceSubject `json:"subjects"`
-}
-
 type InferenceWorkspaceSpec struct {
-	// Access declares identities selected by the trusted workspace provisioner.
-	Access WorkspaceAccess `json:"access"`
-
 	// Mode selects a direct host namespace or an isolated vCluster.
 	// +kubebuilder:default=Namespace
 	// +kubebuilder:validation:Enum=Namespace;VCluster

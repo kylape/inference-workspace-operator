@@ -7,10 +7,10 @@ for provisioning isolated development and test workspaces. Client tools such as
 `infra` and a future UI create `InferenceWorkspace` resources; the operator
 reconciles the cluster resources needed to make each workspace usable.
 
-The operator owns cluster-local workspace provisioning and enforcement of
-workspace access. The `infra` service owns identity, entitlement, subject
-selection, and expiration policy. The operator does not replace Kueue, Forge,
-Fournos, or higher-level lifecycle tools.
+The operator owns cluster-local workspace provisioning. Namespace RBAC and
+external lifecycle tools own identity, entitlement, and expiration policy. The
+operator does not replace Kueue, Forge, Fournos, or higher-level lifecycle
+tools.
 
 ## API contract
 
@@ -29,20 +29,15 @@ metadata:
 spec:
   mode: VCluster
   clusterQueue: inference-workspaces
-  access:
-    subjects:
-      - kind: ServiceAccount
-        namespace: infra-users
-        name: alice
 ```
 
 `spec.mode` is immutable and selects `Namespace` or `VCluster`; it defaults to
 `Namespace`. The `infra` service account may receive cluster-wide CRUD access
 to the namespaced workspace resources. Direct users can instead receive CRUD
-access only within a GitOps-provisioned control namespace. `infra` selects one
-or more existing service accounts in `spec.access.subjects`, while the operator
-remains the sole RBAC actuator and limits those subjects to mode-appropriate
-permissions.
+access only within a GitOps-provisioned control namespace. Existing namespace
+RBAC determines who may create workspaces and read their kubeconfig Secrets;
+the operator does not grant access to arbitrary identities named by a
+workspace request.
 
 ## Namespace reconciliation
 
@@ -56,18 +51,20 @@ already exists and is not controlled by the requesting `InferenceWorkspace`,
 reconciliation fails and the collision is reported through the `Ready`
 condition.
 
-For namespace mode, the operator binds every declared subject to the
-`inference-workspace-user` ClusterRole. The role allows
+For namespace mode, the operator binds only its generated kubeconfig
+ServiceAccount to the `inference-workspace-user` ClusterRole. The role allows
 normal application and inference workload management but excludes CRD, RBAC,
 and Kueue queue mutation. It grants read-only access to the workspace's
 LocalQueue and Workloads so users can inspect admission state. Users that
 require their own CRDs use vCluster mode.
 
-The operator also creates a dedicated ServiceAccount, binds it to the same
-workspace role, and creates a kubeconfig Secret for that ServiceAccount in the
-workspace namespace. The kubeconfig uses the host cluster API endpoint and is
-published through `status.kubeconfigSecretRef` after the ServiceAccount token
-and CA have been populated.
+The operator creates a dedicated ServiceAccount in the backing namespace,
+binds it to the same workspace role, and creates a kubeconfig Secret for that
+ServiceAccount in the namespace containing the `InferenceWorkspace`. The
+kubeconfig uses the host cluster API endpoint and is published through
+`status.kubeconfigSecretRef` after the ServiceAccount token and CA have been
+populated. The requester receives no additional access; its existing RBAC must
+permit reading the Secret.
 
 The workspace role is intentionally defined by this operator instead of using
 the built-in `admin` or `edit` roles. Those roles are dynamically extended by
@@ -119,9 +116,10 @@ fatal so an incompatible profile is never selected silently.
 The vCluster kubeconfig grants access to the virtual cluster and must not
 contain host cluster credentials. Its Secret reference is published in
 `status.kubeconfigSecretRef` only after both the control plane and credential
-are ready. The operator creates a namespaced Role limited to `get` on that
-specific Secret and binds the declared access subjects to it. The subjects
-receive no other access to the host workspace namespace.
+are ready. The operator copies the kubeconfig into the namespace containing
+the `InferenceWorkspace`; existing namespace RBAC must permit the requester to
+read that Secret. The requester receives no other access to the host backing
+namespace.
 
 On OpenShift, the operator reads the cluster applications domain from the
 cluster-scoped Ingress configuration and creates a Route named after the
@@ -143,8 +141,8 @@ status:
   namespaceRef:
     name: workspace-alice-test
   kubeconfigSecretRef:
-    namespace: workspace-alice-test
-    name: workspace-kubeconfig # Namespace mode; vCluster uses vc-... here
+    namespace: alice-dev
+    name: workspace-alice-test-kubeconfig # Namespace mode; vCluster uses vc-... here
   conditions:
     - type: Ready
       status: "True"
@@ -157,8 +155,8 @@ status:
 wait for the ServiceAccount token Secret; vCluster workspaces wait for the
 control plane and vCluster credential. `Ready=False` communicates failures
 through specific reasons such as `NamespaceCollision`, `ClusterQueueNotFound`,
-`QueueNotReady`, `KubeconfigNotReady`, `AccessSubjectNotFound`,
-`VClusterNotReady`, or `ReconciliationFailed`.
+`QueueNotReady`, `KubeconfigNotReady`, `VClusterNotReady`, or
+`ReconciliationFailed`.
 
 Object deletion is represented by `metadata.deletionTimestamp`; no deletion or
 expiration condition is added.

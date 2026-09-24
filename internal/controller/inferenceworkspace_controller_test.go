@@ -2,7 +2,6 @@ package controller
 
 import (
 	"context"
-	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -30,16 +29,14 @@ func TestReconcileNamespaceWorkspace(t *testing.T) {
 	workspace := &workspacev1alpha1.InferenceWorkspace{
 		ObjectMeta: metav1.ObjectMeta{Name: "example", Namespace: "requests", UID: types.UID("workspace-uid")},
 		Spec: workspacev1alpha1.InferenceWorkspaceSpec{
-			Access:       testAccess("access", "alice"),
 			ClusterQueue: "development",
 		},
 	}
 	clusterQueue := &kueuev1beta2.ClusterQueue{ObjectMeta: metav1.ObjectMeta{Name: "development"}}
-	serviceAccount := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: "alice", Namespace: "access"}}
 	client := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithStatusSubresource(&workspacev1alpha1.InferenceWorkspace{}).
-		WithObjects(workspace, clusterQueue, serviceAccount).
+		WithObjects(workspace, clusterQueue).
 		Build()
 	reconciler := &InferenceWorkspaceReconciler{Client: client, Scheme: scheme}
 	request := ctrl.Request{NamespacedName: types.NamespacedName{Name: workspace.Name, Namespace: workspace.Namespace}}
@@ -66,7 +63,7 @@ func TestReconcileNamespaceWorkspace(t *testing.T) {
 		t.Fatalf("workspace access RoleBinding: %v", err)
 	}
 	if binding.RoleRef.Kind != "ClusterRole" || binding.RoleRef.Name != WorkspaceRoleName ||
-		len(binding.Subjects) != 2 || binding.Subjects[1].Name != "alice" || binding.Subjects[1].Namespace != "access" ||
+		len(binding.Subjects) != 1 ||
 		binding.Subjects[0].Name != NamespaceKubeconfigServiceAccountName || binding.Subjects[0].Namespace != namespace.Name {
 		t.Fatalf("unexpected workspace access binding: %#v", binding)
 	}
@@ -99,7 +96,6 @@ func TestNamespaceCollision(t *testing.T) {
 			UID:        types.UID("workspace-uid"),
 			Finalizers: []string{FinalizerName},
 		},
-		Spec: workspacev1alpha1.InferenceWorkspaceSpec{Access: testAccess("access", "alice")},
 	}
 	namespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "workspace-collision"}}
 	client := fake.NewClientBuilder().
@@ -122,59 +118,26 @@ func TestNamespaceCollision(t *testing.T) {
 	}
 }
 
-func TestMissingAccessSubjectIsReported(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	scheme := testScheme(t)
-	workspace := &workspacev1alpha1.InferenceWorkspace{
-		ObjectMeta: metav1.ObjectMeta{Name: "missing", Namespace: "requests", UID: types.UID("workspace-uid"), Finalizers: []string{FinalizerName}},
-		Spec:       workspacev1alpha1.InferenceWorkspaceSpec{Access: testAccess("access", "missing")},
-	}
-	client := fake.NewClientBuilder().WithScheme(scheme).
-		WithStatusSubresource(&workspacev1alpha1.InferenceWorkspace{}).
-		WithObjects(workspace).Build()
-	reconciler := &InferenceWorkspaceReconciler{Client: client, Scheme: scheme}
-
-	if _, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: workspace.Name, Namespace: workspace.Namespace}}); err != nil {
-		t.Fatal(err)
-	}
-	current := &workspacev1alpha1.InferenceWorkspace{}
-	if err := client.Get(ctx, types.NamespacedName{Name: workspace.Name, Namespace: workspace.Namespace}, current); err != nil {
-		t.Fatal(err)
-	}
-	ready := apimeta.FindStatusCondition(current.Status.Conditions, workspacev1alpha1.ReadyCondition)
-	if ready == nil || ready.Status != metav1.ConditionFalse || ready.Reason != "AccessSubjectNotFound" {
-		t.Fatalf("unexpected Ready condition: %#v", ready)
-	}
-}
-
-func TestMissingReplacementSubjectRevokesPreviousAccess(t *testing.T) {
+func TestNamespaceAccessOnlyBindsGeneratedServiceAccount(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	scheme := testScheme(t)
 	workspace := &workspacev1alpha1.InferenceWorkspace{
 		ObjectMeta: metav1.ObjectMeta{Name: "revoke", Namespace: "requests", UID: types.UID("workspace-uid")},
-		Spec:       workspacev1alpha1.InferenceWorkspaceSpec{Access: testAccess("access", "alice")},
 	}
-	alice := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: "alice", Namespace: "access"}}
-	client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(workspace, alice).Build()
+	client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(workspace).Build()
 	reconciler := &InferenceWorkspaceReconciler{Client: client, Scheme: scheme}
 	const namespace = "workspace-revoke"
 
-	if err := reconciler.ensureAccess(ctx, workspace, namespace); err != nil {
+	if err := reconciler.ensureNamespaceServiceAccountAccess(ctx, workspace, namespace); err != nil {
 		t.Fatal(err)
-	}
-	workspace.Spec.Access = testAccess("access", "missing")
-	err := reconciler.ensureAccess(ctx, workspace, namespace)
-	if !errors.Is(err, ErrAccessSubjectNotFound) {
-		t.Fatalf("ensureAccess() error = %v, want ErrAccessSubjectNotFound", err)
 	}
 	binding := &rbacv1.RoleBinding{}
 	if err := client.Get(ctx, types.NamespacedName{Name: AccessBindingName, Namespace: namespace}, binding); err != nil {
 		t.Fatal(err)
 	}
-	if len(binding.Subjects) != 1 || binding.Subjects[0].Name != NamespaceKubeconfigServiceAccountName {
-		t.Fatalf("removed subject retained access: %#v", binding.Subjects)
+	if len(binding.Subjects) != 1 || binding.Subjects[0].Name != NamespaceKubeconfigServiceAccountName || binding.Subjects[0].Namespace != namespace {
+		t.Fatalf("unexpected subjects in workspace access binding: %#v", binding.Subjects)
 	}
 }
 
@@ -204,11 +167,11 @@ func TestEnsureNamespaceKubeconfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ready || secretRef == nil || secretRef.Name != NamespaceKubeconfigSecretName || secretRef.Namespace != namespace {
+	if !ready || secretRef == nil || secretRef.Name != "workspace-example-kubeconfig" || secretRef.Namespace != workspace.Namespace {
 		t.Fatalf("unexpected namespace kubeconfig result: ready=%v ref=%#v", ready, secretRef)
 	}
 	kubeconfig := &corev1.Secret{}
-	if err := client.Get(ctx, types.NamespacedName{Name: NamespaceKubeconfigSecretName, Namespace: namespace}, kubeconfig); err != nil {
+	if err := client.Get(ctx, types.NamespacedName{Name: "workspace-example-kubeconfig", Namespace: workspace.Namespace}, kubeconfig); err != nil {
 		t.Fatal(err)
 	}
 	contents := string(kubeconfig.Data["config"])
@@ -287,7 +250,7 @@ func TestEnsureVClusterUsesDetectedPlatformAndScopedBinding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ready || secretRef == nil || secretRef.Name != "vc-example-external" {
+	if !ready || secretRef == nil || secretRef.Name != "vc-example-external" || secretRef.Namespace != workspace.Namespace {
 		t.Fatalf("unexpected vCluster readiness: ready=%v secretRef=%#v", ready, secretRef)
 	}
 	if installer.calls != 1 || !installer.openShift || installer.publicHost != "example.apps.example.test" {
@@ -316,7 +279,7 @@ func TestEnsureVClusterUsesDetectedPlatformAndScopedBinding(t *testing.T) {
 		t.Fatalf("Route TLS termination = %q, want passthrough", termination)
 	}
 	publicSecret := &corev1.Secret{}
-	if err := client.Get(ctx, types.NamespacedName{Name: "vc-example-external", Namespace: namespace}, publicSecret); err != nil {
+	if err := client.Get(ctx, types.NamespacedName{Name: "vc-example-external", Namespace: workspace.Namespace}, publicSecret); err != nil {
 		t.Fatalf("public kubeconfig Secret: %v", err)
 	}
 	if !containsString(string(publicSecret.Data["config"]), "https://example.apps.example.test") {
@@ -324,40 +287,28 @@ func TestEnsureVClusterUsesDetectedPlatformAndScopedBinding(t *testing.T) {
 	}
 }
 
-func TestEnsureVClusterAccessOnlyReadsKubeconfigSecret(t *testing.T) {
+func TestEnsureVClusterDoesNotCreateAccessBindings(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	scheme := testScheme(t)
 	workspace := &workspacev1alpha1.InferenceWorkspace{
 		ObjectMeta: metav1.ObjectMeta{Name: "example", Namespace: "requests", UID: types.UID("workspace-uid")},
-		Spec: workspacev1alpha1.InferenceWorkspaceSpec{
-			Access: testAccess("access", "alice"),
-			Mode:   workspacev1alpha1.WorkspaceModeVCluster,
-		},
+		Spec:       workspacev1alpha1.InferenceWorkspaceSpec{Mode: workspacev1alpha1.WorkspaceModeVCluster},
 	}
-	serviceAccount := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: "alice", Namespace: "access"}}
-	client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(workspace, serviceAccount).Build()
+	client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(workspace).Build()
 	reconciler := &InferenceWorkspaceReconciler{Client: client, Scheme: scheme}
 	namespace := "workspace-example"
 
-	if err := reconciler.ensureAccess(ctx, workspace, namespace); err != nil {
+	if err := reconciler.removeLegacyVClusterAccess(ctx, workspace, namespace); err != nil {
 		t.Fatal(err)
 	}
 	role := &rbacv1.Role{}
-	if err := client.Get(ctx, types.NamespacedName{Name: VClusterAccessRoleName, Namespace: namespace}, role); err != nil {
-		t.Fatal(err)
-	}
-	if len(role.Rules) != 1 || len(role.Rules[0].Resources) != 1 || role.Rules[0].Resources[0] != "secrets" ||
-		len(role.Rules[0].ResourceNames) != 1 || role.Rules[0].ResourceNames[0] != "vc-example" ||
-		len(role.Rules[0].Verbs) != 1 || role.Rules[0].Verbs[0] != "get" {
-		t.Fatalf("unexpected vCluster access role: %#v", role.Rules)
+	if err := client.Get(ctx, types.NamespacedName{Name: "workspace-kubeconfig-reader", Namespace: namespace}, role); err == nil {
+		t.Fatal("legacy vCluster access Role still exists")
 	}
 	binding := &rbacv1.RoleBinding{}
-	if err := client.Get(ctx, types.NamespacedName{Name: AccessBindingName, Namespace: namespace}, binding); err != nil {
-		t.Fatal(err)
-	}
-	if binding.RoleRef.Kind != "Role" || binding.RoleRef.Name != VClusterAccessRoleName {
-		t.Fatalf("unexpected vCluster access binding: %#v", binding.RoleRef)
+	if err := client.Get(ctx, types.NamespacedName{Name: AccessBindingName, Namespace: namespace}, binding); err == nil {
+		t.Fatal("legacy vCluster access RoleBinding still exists")
 	}
 }
 
@@ -431,12 +382,6 @@ func contains(values []string, target string) bool {
 
 func containsString(value, target string) bool {
 	return strings.Contains(value, target)
-}
-
-func testAccess(namespace, name string) workspacev1alpha1.WorkspaceAccess {
-	return workspacev1alpha1.WorkspaceAccess{Subjects: []workspacev1alpha1.WorkspaceSubject{{
-		Kind: "ServiceAccount", Namespace: namespace, Name: name,
-	}}}
 }
 
 func testScheme(t *testing.T) *runtime.Scheme {

@@ -6,8 +6,3 @@ metadata:
 spec:
   mode: Namespace
   clusterQueue: inference-workspaces
-  access:
-    subjects:
-      - kind: ServiceAccount
-        namespace: infra-users
-        name: alice

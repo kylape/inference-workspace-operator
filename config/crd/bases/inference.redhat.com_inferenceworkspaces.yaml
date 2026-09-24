@@ -49,46 +49,6 @@ spec:
             type: object
           spec:
             properties:
-              access:
-                description: Access declares identities selected by the trusted workspace
-                  provisioner.
-                properties:
-                  subjects:
-                    description: Subjects are service accounts that receive mode-appropriate
-                      workspace access.
-                    items:
-                      properties:
-                        kind:
-                          description: Kind is currently limited to ServiceAccount.
-                          enum:
-                          - ServiceAccount
-                          type: string
-                        name:
-                          description: Name is the service account name.
-                          maxLength: 253
-                          pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
-                          type: string
-                        namespace:
-                          description: Namespace is the service account namespace.
-                          maxLength: 63
-                          pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
-                          type: string
-                      required:
-                      - kind
-                      - name
-                      - namespace
-                      type: object
-                    maxItems: 32
-                    minItems: 1
-                    type: array
-                    x-kubernetes-list-map-keys:
-                    - kind
-                    - namespace
-                    - name
-                    x-kubernetes-list-type: map
-                required:
-                - subjects
-                type: object
               clusterQueue:
                 default: inference-workspaces
                 description: ClusterQueue is the Kueue ClusterQueue that backs the
@@ -110,8 +70,6 @@ spec:
                 x-kubernetes-validations:
                 - message: mode is immutable
                   rule: self == oldSelf
-            required:
-            - access
             type: object
           status:
             properties:

@@ -24,11 +24,6 @@ metadata:
 spec:
   mode: VCluster
   clusterQueue: inference-workspaces
-  access:
-    subjects:
-      - kind: ServiceAccount
-        namespace: infra-users
-        name: alice
 ```
 
 Creating this resource provisions:
@@ -37,10 +32,10 @@ Creating this resource provisions:
 * a Kueue `LocalQueue` named `default` that references the platform-owned
   `inference-workspaces` ClusterQueue.
 
-In `Namespace` mode, the operator also creates a dedicated ServiceAccount and
-publishes a host-cluster kubeconfig in the workspace namespace. The kubeconfig
-Secret reference is available in status after Kubernetes has populated the
-ServiceAccount token.
+In `Namespace` mode, the operator also creates a dedicated ServiceAccount in
+the backing namespace and publishes a host-cluster kubeconfig Secret in the
+InferenceWorkspace's namespace. The kubeconfig Secret reference is available
+in status after Kubernetes has populated the ServiceAccount token.
 
 For `VCluster` mode, the operator also installs the pinned vCluster chart and
 publishes its kubeconfig Secret reference in status. On OpenShift, it also
@@ -58,11 +53,10 @@ cluster RBAC, or CRDs. Kueue queue selection remains controlled by the operator.
 `spec.clusterQueue` may reference any ClusterQueue in the initial API and
 defaults to `inference-workspaces` when omitted.
 
-The external `infra` service selects entitled service accounts through
-`spec.access.subjects`, but it receives no permission to create RBAC. The
-operator enforces fixed access: direct workspaces bind the
-`inference-workspace-user` ClusterRole, while vCluster workspaces grant only
-`get` on that workspace's kubeconfig Secret.
+The operator does not grant access to arbitrary identities from the
+`InferenceWorkspace` spec. Existing namespace RBAC determines who may create a
+workspace and read its kubeconfig Secret. The operator-generated Namespace-mode
+ServiceAccount is the only identity it binds to the workspace role.
 
 ## Development
 
