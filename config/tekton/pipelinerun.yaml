@@ -8,7 +8,7 @@ spec:
     - name: git-revision
       value: codex/initial-inference-workspace-api
     - name: image
-      value: quay.io/klape/inference-workspace-operator:bf91efd
+      value: quay.io/klape/inference-workspace-operator:5b38aca
     - name: push-image
       value: "true"
   pipelineRef:
