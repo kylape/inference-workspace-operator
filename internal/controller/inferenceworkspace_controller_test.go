@@ -66,7 +66,8 @@ func TestReconcileNamespaceWorkspace(t *testing.T) {
 		t.Fatalf("workspace access RoleBinding: %v", err)
 	}
 	if binding.RoleRef.Kind != "ClusterRole" || binding.RoleRef.Name != WorkspaceRoleName ||
-		len(binding.Subjects) != 1 || binding.Subjects[0].Name != "alice" || binding.Subjects[0].Namespace != "access" {
+		len(binding.Subjects) != 2 || binding.Subjects[1].Name != "alice" || binding.Subjects[1].Namespace != "access" ||
+		binding.Subjects[0].Name != NamespaceKubeconfigServiceAccountName || binding.Subjects[0].Namespace != namespace.Name {
 		t.Fatalf("unexpected workspace access binding: %#v", binding)
 	}
 	queue := &kueuev1beta2.LocalQueue{}
@@ -172,8 +173,49 @@ func TestMissingReplacementSubjectRevokesPreviousAccess(t *testing.T) {
 	if err := client.Get(ctx, types.NamespacedName{Name: AccessBindingName, Namespace: namespace}, binding); err != nil {
 		t.Fatal(err)
 	}
-	if len(binding.Subjects) != 0 {
+	if len(binding.Subjects) != 1 || binding.Subjects[0].Name != NamespaceKubeconfigServiceAccountName {
 		t.Fatalf("removed subject retained access: %#v", binding.Subjects)
+	}
+}
+
+func TestEnsureNamespaceKubeconfig(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	scheme := testScheme(t)
+	workspace := &workspacev1alpha1.InferenceWorkspace{
+		ObjectMeta: metav1.ObjectMeta{Name: "example", Namespace: "requests", UID: types.UID("workspace-uid")},
+	}
+	namespace := "workspace-example"
+	tokenSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        NamespaceKubeconfigTokenSecretName,
+			Namespace:   namespace,
+			Annotations: workspaceOwnershipAnnotations(workspace),
+		},
+		Data: map[string][]byte{
+			corev1.ServiceAccountTokenKey:  []byte("token-value"),
+			corev1.ServiceAccountRootCAKey: []byte("ca-value"),
+		},
+	}
+	client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(workspace, tokenSecret).Build()
+	reconciler := &InferenceWorkspaceReconciler{Client: client, Scheme: scheme, APIServerURL: "https://api.example.test/"}
+
+	secretRef, ready, err := reconciler.ensureNamespaceKubeconfig(ctx, workspace, namespace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ready || secretRef == nil || secretRef.Name != NamespaceKubeconfigSecretName || secretRef.Namespace != namespace {
+		t.Fatalf("unexpected namespace kubeconfig result: ready=%v ref=%#v", ready, secretRef)
+	}
+	kubeconfig := &corev1.Secret{}
+	if err := client.Get(ctx, types.NamespacedName{Name: NamespaceKubeconfigSecretName, Namespace: namespace}, kubeconfig); err != nil {
+		t.Fatal(err)
+	}
+	contents := string(kubeconfig.Data["config"])
+	for _, expected := range []string{"https://api.example.test", "token-value", "Y2EtdmFsdWU="} {
+		if !strings.Contains(contents, expected) {
+			t.Fatalf("kubeconfig does not contain %q: %s", expected, contents)
+		}
 	}
 }
 

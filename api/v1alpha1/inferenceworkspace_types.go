@@ -64,7 +64,7 @@ type InferenceWorkspaceStatus struct {
 	// NamespaceRef identifies the backing host-cluster namespace.
 	NamespaceRef *corev1.LocalObjectReference `json:"namespaceRef,omitempty"`
 
-	// KubeconfigSecretRef is populated only for a ready vCluster workspace.
+	// KubeconfigSecretRef references credentials for a ready workspace.
 	KubeconfigSecretRef *corev1.SecretReference `json:"kubeconfigSecretRef,omitempty"`
 
 	// Conditions contains the aggregate Ready condition.

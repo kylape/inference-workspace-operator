@@ -176,7 +176,7 @@ spec:
                 - type
                 x-kubernetes-list-type: map
               kubeconfigSecretRef:
-                description: KubeconfigSecretRef is populated only for a ready vCluster
+                description: KubeconfigSecretRef references credentials for a ready
                   workspace.
                 properties:
                   name:

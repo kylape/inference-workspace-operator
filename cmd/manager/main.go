@@ -76,6 +76,7 @@ func main() {
 		Scheme:            manager.GetScheme(),
 		VClusterInstaller: workspacevcluster.HelmInstaller{},
 		OpenShift:         openShift,
+		APIServerURL:      config.Host,
 	}).SetupWithManager(manager); err != nil {
 		ctrl.Log.Error(err, "unable to create controller")
 		os.Exit(1)

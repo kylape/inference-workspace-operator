@@ -37,6 +37,11 @@ Creating this resource provisions:
 * a Kueue `LocalQueue` named `default` that references the platform-owned
   `inference-workspaces` ClusterQueue.
 
+In `Namespace` mode, the operator also creates a dedicated ServiceAccount and
+publishes a host-cluster kubeconfig in the workspace namespace. The kubeconfig
+Secret reference is available in status after Kubernetes has populated the
+ServiceAccount token.
+
 For `VCluster` mode, the operator also installs the pinned vCluster chart and
 publishes its kubeconfig Secret reference in status. On OpenShift, it also
 creates a TLS-passthrough Route at

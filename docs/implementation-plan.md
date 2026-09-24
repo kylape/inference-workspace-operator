@@ -63,6 +63,12 @@ and Kueue queue mutation. It grants read-only access to the workspace's
 LocalQueue and Workloads so users can inspect admission state. Users that
 require their own CRDs use vCluster mode.
 
+The operator also creates a dedicated ServiceAccount, binds it to the same
+workspace role, and creates a kubeconfig Secret for that ServiceAccount in the
+workspace namespace. The kubeconfig uses the host cluster API endpoint and is
+published through `status.kubeconfigSecretRef` after the ServiceAccount token
+and CA have been populated.
+
 The workspace role is intentionally defined by this operator instead of using
 the built-in `admin` or `edit` roles. Those roles are dynamically extended by
 installed operators and cannot guarantee that LocalQueue mutation remains
@@ -110,8 +116,8 @@ the cluster. On OpenShift it selects the chart's `restricted` security profile;
 on Kubernetes it leaves the profile at the chart default. Discovery errors are
 fatal so an incompatible profile is never selected silently.
 
-The kubeconfig grants access to the virtual cluster and must not contain host
-cluster credentials. Its Secret reference is published in
+The vCluster kubeconfig grants access to the virtual cluster and must not
+contain host cluster credentials. Its Secret reference is published in
 `status.kubeconfigSecretRef` only after both the control plane and credential
 are ready. The operator creates a namespaced Role limited to `get` on that
 specific Secret and binds the declared access subjects to it. The subjects
@@ -138,7 +144,7 @@ status:
     name: workspace-alice-test
   kubeconfigSecretRef:
     namespace: workspace-alice-test
-    name: vc-alice-test-external # OpenShift; vc-alice-test elsewhere
+    name: workspace-kubeconfig # Namespace mode; vCluster uses vc-... here
   conditions:
     - type: Ready
       status: "True"
@@ -147,10 +153,12 @@ status:
       message: Workspace is ready
 ```
 
-`kubeconfigSecretRef` is populated only for a ready vCluster and is omitted for
-namespace workspaces. `Ready=False` communicates failures through specific
-reasons such as `NamespaceCollision`, `ClusterQueueNotFound`, `QueueNotReady`,
-`AccessSubjectNotFound`, `VClusterNotReady`, or `ReconciliationFailed`.
+`kubeconfigSecretRef` is populated for a ready workspace. Namespace workspaces
+wait for the ServiceAccount token Secret; vCluster workspaces wait for the
+control plane and vCluster credential. `Ready=False` communicates failures
+through specific reasons such as `NamespaceCollision`, `ClusterQueueNotFound`,
+`QueueNotReady`, `KubeconfigNotReady`, `AccessSubjectNotFound`,
+`VClusterNotReady`, or `ReconciliationFailed`.
 
 Object deletion is represented by `metadata.deletionTimestamp`; no deletion or
 expiration condition is added.
