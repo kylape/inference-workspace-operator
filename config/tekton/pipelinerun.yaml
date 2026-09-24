@@ -8,9 +8,9 @@ spec:
     - name: git-revision
       value: codex/initial-inference-workspace-api
     - name: image
-      value: quay.io/klape/inference-workspace-operator:initial
+      value: quay.io/klape/inference-workspace-operator:bf91efd
     - name: push-image
-      value: "false"
+      value: "true"
   pipelineRef:
     name: inference-workspace-operator-build
   taskRunTemplate:
@@ -20,3 +20,6 @@ spec:
   workspaces:
     - emptyDir: {}
       name: source
+    - name: registry-auth
+      secret:
+        secretName: inference-workspace-operator-registry-auth
