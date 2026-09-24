@@ -168,6 +168,14 @@ rules:
     verbs:
       - get
   - apiGroups:
+      - config.openshift.io
+    resources:
+      - infrastructures
+    resourceNames:
+      - cluster
+    verbs:
+      - get
+  - apiGroups:
       - coordination.k8s.io
     resources:
       - leases
