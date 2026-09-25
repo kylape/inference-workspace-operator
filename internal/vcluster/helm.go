@@ -46,7 +46,7 @@ func (h HelmInstaller) Ensure(ctx context.Context, name, namespace string, openS
 	if err := json.Unmarshal(list, &releases); err != nil {
 		return fmt.Errorf("decode Helm release list: %w", err)
 	}
-	if releaseDeployed(releases) && publicHost == "" {
+	if releaseDeployed(releases) {
 		return nil
 	}
 
