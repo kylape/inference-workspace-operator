@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"os"
+	"time"
 
 	workspacev1alpha1 "github.com/kylape/inference-workspace-operator/api/v1alpha1"
 	workspacecontroller "github.com/kylape/inference-workspace-operator/internal/controller"
@@ -59,12 +60,18 @@ func main() {
 	}
 	ctrl.Log.Info("detected cluster platform", "openShift", openShift)
 
+	leaseDuration := 60 * time.Second
+	renewDeadline := 30 * time.Second
+	retryPeriod := 10 * time.Second
 	manager, err := ctrl.NewManager(config, ctrl.Options{
 		Scheme:                 scheme,
 		Metrics:                metricsserver.Options{BindAddress: metricsAddr, SecureServing: true},
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         leaderElection,
 		LeaderElectionID:       "inference-workspace-operator.inference.redhat.com",
+		LeaseDuration:          &leaseDuration,
+		RenewDeadline:          &renewDeadline,
+		RetryPeriod:            &retryPeriod,
 	})
 	if err != nil {
 		ctrl.Log.Error(err, "unable to start manager")
